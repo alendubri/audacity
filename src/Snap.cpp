@@ -8,8 +8,10 @@
 
 **********************************************************************/
 
+#include "Audacity.h"
 #include "Snap.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "Project.h"
@@ -19,11 +21,27 @@
 
 #include <wx/arrimpl.cpp>
 
-WX_DEFINE_USER_EXPORTED_OBJARRAY(TrackClipArray);
-
-static int CompareSnapPoints(SnapPoint *s1, SnapPoint *s2)
+inline bool operator < (SnapPoint s1, SnapPoint s2)
 {
-   return (s1->t - s2->t > 0? 1 : -1);
+   return s1.t < s2.t;
+}
+
+TrackClip::TrackClip(Track *t, WaveClip *c)
+{
+   track = origTrack = t;
+   dstTrack = NULL;
+   clip = c;
+}
+
+#ifndef __AUDACITY_OLD_STD__
+TrackClip::TrackClip(TrackClip&& tc)
+   : track{tc.track}, origTrack{tc.origTrack}, dstTrack{tc.dstTrack},
+   clip{tc.clip}, holder{std::move(tc.holder)} {}
+#endif
+
+TrackClip::~TrackClip()
+{
+
 }
 
 SnapManager::SnapManager(TrackList *tracks,
@@ -32,8 +50,7 @@ SnapManager::SnapManager(TrackList *tracks,
                          const TrackArray *trackExclusions,
                          bool noTimeSnap,
                          int pixelTolerance)
-:  mConverter(NumericConverter::TIME),
-   mSnapPoints(CompareSnapPoints)
+:  mConverter(NumericConverter::TIME)
 {
    mTracks = tracks;
    mZoomInfo = zoomInfo;
@@ -57,10 +74,6 @@ SnapManager::SnapManager(TrackList *tracks,
 
 SnapManager::~SnapManager()
 {
-   for (size_t i = 0, cnt = mSnapPoints.GetCount(); i < cnt; ++i)
-   {
-      delete mSnapPoints[i];
-   }
 }
 
 void SnapManager::Reinit()
@@ -75,17 +88,12 @@ void SnapManager::Reinit()
       return;
    }
 
-   // Save new settings
+   // Save NEW settings
    mSnapTo = snapTo;
    mRate = rate;
    mFormat = format;
 
-   // Clear snap points
-   for (size_t i = 0, cnt = mSnapPoints.GetCount(); i < cnt; ++i)
-   {
-      delete mSnapPoints[i];
-   }
-   mSnapPoints.Clear();
+   mSnapPoints.clear();
 
    // Grab time-snapping prefs (unless otherwise requested)
    mSnapToTime = false;
@@ -99,12 +107,14 @@ void SnapManager::Reinit()
    }
 
    // Add a SnapPoint at t=0
-   mSnapPoints.Add(new SnapPoint(0.0, NULL));
+   mSnapPoints.push_back(SnapPoint{});
 
    TrackListIterator iter(mTracks);
    for (Track *track = iter.First();  track; track = iter.Next())
    {
-      if (mTrackExclusions && mTrackExclusions->Index(track) != wxNOT_FOUND)
+      if (mTrackExclusions &&
+          mTrackExclusions->end() !=
+          std::find(mTrackExclusions->begin(), mTrackExclusions->end(), track))
       {
          continue;
       }
@@ -126,18 +136,16 @@ void SnapManager::Reinit()
       }
       else if (track->GetKind() == Track::Wave)
       {
-         WaveTrack *waveTrack = (WaveTrack *)track;
-         WaveClipList::compatibility_iterator it;
-         for (it = waveTrack->GetClipIterator(); it; it = it->GetNext())
+         auto waveTrack = static_cast<const WaveTrack *>(track);
+         for (const auto &clip: waveTrack->GetClips())
          {
-            WaveClip *clip = it->GetData();
             if (mClipExclusions)
             {
                bool skip = false;
-               for (size_t j = 0, cnt = mClipExclusions->GetCount(); j < cnt; ++j)
+               for (size_t j = 0, cnt = mClipExclusions->size(); j < cnt; ++j)
                {
-                  if (mClipExclusions->Item(j).track == waveTrack &&
-                      mClipExclusions->Item(j).clip == clip)
+                  if ((*mClipExclusions)[j].track == waveTrack &&
+                      (*mClipExclusions)[j].clip == clip.get())
                   {
                      skip = true;
                      break;
@@ -162,10 +170,13 @@ void SnapManager::Reinit()
       }
 #endif
    }
+
+   // Sort all by time
+   std::sort(mSnapPoints.begin(), mSnapPoints.end());
 }
 
 // Adds to mSnapPoints, filtering by TimeConverter
-void SnapManager::CondListAdd(double t, Track *track)
+void SnapManager::CondListAdd(double t, const Track *track)
 {
    if (mSnapToTime)
    {
@@ -174,14 +185,14 @@ void SnapManager::CondListAdd(double t, Track *track)
 
    if (!mSnapToTime || mConverter.GetValue() == t)
    {
-      mSnapPoints.Add(new SnapPoint(t, track));
+      mSnapPoints.push_back(SnapPoint{ t, track });
    }
 }
 
 // Return the time of the SnapPoint at a given index
 double SnapManager::Get(size_t index)
 {
-   return mSnapPoints[index]->t;
+   return mSnapPoints[index].t;
 }
 
 // Returns the difference in time between t and the point at a given index
@@ -213,7 +224,7 @@ size_t SnapManager::Find(double t, size_t i0, size_t i1)
 // Find the SnapPoint nearest to time t
 size_t SnapManager::Find(double t)
 {
-   size_t cnt = mSnapPoints.GetCount();
+   size_t cnt = mSnapPoints.size();
    size_t index = Find(t, 0, cnt);
 
    // At this point, either index is the closest, or the next one
@@ -242,7 +253,7 @@ bool SnapManager::SnapToPoints(Track *currentTrack,
 {
    *outT = t;
 
-   size_t cnt = mSnapPoints.GetCount();
+   size_t cnt = mSnapPoints.size();
    if (cnt == 0)
    {
       return false;
@@ -280,11 +291,14 @@ bool SnapManager::SnapToPoints(Track *currentTrack,
       return true;
    }
 
-   size_t indexInThisTrack = -1;
+   // indexInThisTrack is ONLY used if count > 0
+   // and is initialised then, so we can 'initialise' it
+   // to anything to keep compiler quiet.
+   size_t indexInThisTrack = left;
    size_t countInThisTrack = 0;
    for (i = left; i <= right; ++i)
    {
-      if (mSnapPoints[i]->track == currentTrack)
+      if (mSnapPoints[i].track == currentTrack)
       {
          indexInThisTrack = i;
          countInThisTrack++;

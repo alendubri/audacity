@@ -1,5 +1,3 @@
-#ifdef EXPERIMENTAL_EQ_SSE_THREADED
-
 /**********************************************************************
 
 Audacity: A Digital Audio Editor
@@ -12,6 +10,9 @@ Intrinsics (SSE/AVX) and Threaded Equalization
 
 #ifndef __AUDACITY_EFFECT_EQUALIZATION48X__
 #define __AUDACITY_EFFECT_EQUALIZATION48X__
+
+#include "../Experimental.h"
+#ifdef EXPERIMENTAL_EQ_SSE_THREADED
 
 #ifdef __AVX_ENABLED
 #define __MAXBUFFERCOUNT 8
@@ -44,8 +45,8 @@ public:
    float* mBufferSouce[__MAXBUFFERCOUNT];
    float* mBufferDest[__MAXBUFFERCOUNT];
    int mBufferLength;
-   sampleCount mFftWindowSize;
-   sampleCount mFftFilterSize;
+   size_t mFftWindowSize;
+   size_t mFftFilterSize;
    float* mScratchBuffer;
    int mContiguousBufferSize;
    EQBufferStatus mBufferStatus;
@@ -93,7 +94,7 @@ public:
    void ExitLoop() { // this will cause the thread to drop from the loops
       mExitLoop=true;
    }
-   virtual void* Entry();
+   void* Entry() override;
    BufferInfo* mBufferInfoList;
    int mBufferInfoCount, mThreadID;
    wxMutex *mMutex;
@@ -129,25 +130,25 @@ private:
    bool ProcessBuffer(fft_type *sourceBuffer, fft_type *destBuffer, sampleCount bufferLength);
    bool ProcessBuffer1x(BufferInfo *bufferInfo);
    bool ProcessOne1x(int count, WaveTrack * t, sampleCount start, sampleCount len);
-   void Filter1x(sampleCount len, float *buffer, float *scratchBuffer);
+   void Filter1x(size_t len, float *buffer, float *scratchBuffer);
 
    bool ProcessBuffer4x(BufferInfo *bufferInfo);
    bool ProcessOne4x(int count, WaveTrack * t, sampleCount start, sampleCount len);
    bool ProcessOne1x4xThreaded(int count, WaveTrack * t, sampleCount start, sampleCount len, int processingType=4);
-   void Filter4x(sampleCount len, float *buffer, float *scratchBuffer);
+   void Filter4x(size_t len, float *buffer, float *scratchBuffer);
 
 #ifdef __AVX_ENABLED
    bool ProcessBuffer8x(BufferInfo *bufferInfo);
    bool ProcessOne8x(int count, WaveTrack * t, sampleCount start, sampleCount len);
    bool ProcessOne8xThreaded(int count, WaveTrack * t, sampleCount start, sampleCount len);
-   void Filter8x(sampleCount len, float *buffer, float *scratchBuffer);
+   void Filter8x(size_t len, float *buffer, float *scratchBuffer);
 #endif
    
    EffectEqualization* mEffectEqualization;
    int mThreadCount;
-   sampleCount mFilterSize;
-   sampleCount mBlockSize;
-   sampleCount mWindowSize;
+   size_t mFilterSize;
+   size_t mBlockSize;
+   size_t  mWindowSize;
    int mBufferCount;
    int mWorkerDataCount;
    int mBlocksPerBuffer;

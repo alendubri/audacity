@@ -11,7 +11,7 @@
 #ifndef __AUDACITY_FREQ_WINDOW__
 #define __AUDACITY_FREQ_WINDOW__
 
-#include <memory>
+#include "MemoryX.h"
 #include <vector>
 #include <wx/brush.h>
 #include <wx/dcmemory.h>
@@ -38,8 +38,6 @@ class wxChoice;
 class FreqWindow;
 class FreqGauge;
 
-class TrackList;
-
 DECLARE_EXPORTED_EVENT_TYPE(AUDACITY_DLL_API, EVT_FREQWINDOW_RECALC, -1);
 
 class SpectrumAnalyst
@@ -62,8 +60,8 @@ public:
    // Return true iff successful
    bool Calculate(Algorithm alg,
       int windowFunc, // see FFT.h for values
-      int windowSize, double rate,
-      const float *data, int dataLen,
+      size_t windowSize, double rate,
+      const float *data, size_t dataLen,
       float *pYMin = NULL, float *pYMax = NULL, // outputs
       FreqGauge *progress = NULL);
 
@@ -80,11 +78,11 @@ private:
 private:
    Algorithm mAlg;
    double mRate;
-   int mWindowSize;
+   size_t mWindowSize;
    std::vector<float> mProcessed;
 };
 
-class FreqGauge : public wxStatusBar
+class FreqGauge final : public wxStatusBar
 {
 public:
    FreqGauge(wxWindow * parent);
@@ -104,7 +102,7 @@ private:
    int mMargin;
 };
 
-class FreqPlot : public wxWindow
+class FreqPlot final : public wxWindow
 {
 public:
    FreqPlot(wxWindow *parent);
@@ -120,17 +118,17 @@ private:
 private:
     FreqWindow *freqWindow;
 
-    DECLARE_EVENT_TABLE();
+    DECLARE_EVENT_TABLE()
 };
 
-class FreqWindow : public wxDialog
+class FreqWindow final : public wxDialogWrapper
 {
 public:
    FreqWindow(wxWindow *parent, wxWindowID id,
               const wxString & title, const wxPoint & pos);
    virtual ~ FreqWindow();
 
-   virtual bool Show( bool show = true );
+   bool Show( bool show = true ) override;
 
 private:
    void GetAudio();
@@ -181,8 +179,8 @@ private:
 
    wxFont mFreqFont;
 
-   wxCursor *mArrowCursor;
-   wxCursor *mCrossCursor;
+   std::unique_ptr<wxCursor> mArrowCursor;
+   std::unique_ptr<wxCursor> mCrossCursor;
 
    wxButton *mCloseButton;
    wxButton *mExportButton;
@@ -199,23 +197,23 @@ private:
 
 
    double mRate;
-   int mDataLen;
+   size_t mDataLen;
    float *mData;
-   int mWindowSize;
+   size_t mWindowSize;
 
    bool mLogAxis;
    float mYMin;
    float mYMax;
    float mYStep;
 
-   wxBitmap *mBitmap;
+   std::unique_ptr<wxBitmap> mBitmap;
 
    int mMouseX;
    int mMouseY;
 
-   std::auto_ptr<SpectrumAnalyst> mAnalyst;
+   std::unique_ptr<SpectrumAnalyst> mAnalyst;
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 
    friend class FreqPlot;
 };

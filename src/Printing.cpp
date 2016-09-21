@@ -33,10 +33,13 @@
 #include "Experimental.h"
 
 // Globals, so that we remember settings from session to session
-static wxPrintData *gPrintData = NULL;
-static wxPageSetupData *gPageSetupData = NULL;
+wxPrintData &gPrintData()
+{
+   static wxPrintData theData;
+   return theData;
+}
 
-class AudacityPrintout : public wxPrintout
+class AudacityPrintout final : public wxPrintout
 {
  public:
    AudacityPrintout(wxString title,
@@ -139,28 +142,17 @@ void AudacityPrintout::GetPageInfo(int *minPage, int *maxPage,
 
 void HandlePageSetup(wxWindow *parent)
 {
-   if (gPageSetupData == NULL)
-      gPageSetupData = new wxPageSetupDialogData();
-   if (gPrintData == NULL)
-      gPrintData = new wxPrintData();
+   wxPageSetupData pageSetupData;
 
-   (*gPageSetupData) = *gPrintData;
-
-   wxPageSetupDialog pageSetupDialog(parent, gPageSetupData);
+   wxPageSetupDialog pageSetupDialog(parent, &pageSetupData);
    pageSetupDialog.ShowModal();
 
-   (*gPrintData) = pageSetupDialog.GetPageSetupData().GetPrintData();
-   (*gPageSetupData) = pageSetupDialog.GetPageSetupData();
+   gPrintData() = pageSetupDialog.GetPageSetupData().GetPrintData();
 }
 
-void HandlePrint(wxWindow *parent, wxString name, TrackList *tracks)
+void HandlePrint(wxWindow *parent, const wxString &name, TrackList *tracks)
 {
-   if (gPageSetupData == NULL)
-      gPageSetupData = new wxPageSetupDialogData();
-   if (gPrintData == NULL)
-      gPrintData = new wxPrintData();
-
-   wxPrintDialogData printDialogData(*gPrintData);
+   wxPrintDialogData printDialogData(gPrintData());
 
    wxPrinter printer(&printDialogData);
    AudacityPrintout printout(name, tracks);
@@ -174,6 +166,6 @@ void HandlePrint(wxWindow *parent, wxString name, TrackList *tracks)
       }
    }
    else {
-      *gPrintData = printer.GetPrintDialogData().GetPrintData();
+      gPrintData() = printer.GetPrintDialogData().GetPrintData();
    }
 }

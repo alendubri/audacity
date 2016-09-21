@@ -30,20 +30,20 @@ wxString SetProjectInfoCommandType::BuildName()
 
 void SetProjectInfoCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *infoTypeValidator = new OptionValidator();
+   auto infoTypeValidator = make_movable<OptionValidator>();
    infoTypeValidator->AddOption(wxT("SelectedTracks"));
    infoTypeValidator->AddOption(wxT("MuteTracks"));
    infoTypeValidator->AddOption(wxT("SoloTracks"));
 
-   signature.AddParameter(wxT("Type"), wxT("Name"), infoTypeValidator);
+   signature.AddParameter(wxT("Type"), wxT("Name"), std::move(infoTypeValidator));
 
-   BoolArrayValidator *TracksSetValidator = new BoolArrayValidator();
-   signature.AddParameter(wxT(kSetOfTracksStr), wxT("x"), TracksSetValidator);
+   auto TracksSetValidator = make_movable<BoolArrayValidator>();
+   signature.AddParameter(wxT(kSetOfTracksStr), wxT("x"), std::move(TracksSetValidator));
 }
 
-Command *SetProjectInfoCommandType::Create(CommandOutputTarget *target)
+CommandHolder SetProjectInfoCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new SetProjectInfoCommand(*this, target);
+   return std::make_shared<SetProjectInfoCommand>(*this, std::move(target));
 }
 
 
@@ -75,7 +75,7 @@ bool SetProjectInfoCommand::Apply(CommandExecutionContext context)
 
 
 // ***********************  Private Methods *******************
-void SetProjectInfoCommand::SetAllTracksParam(TrackList *projTracks, wxString boolValueStr, Setter functPtrToSetter)
+void SetProjectInfoCommand::SetAllTracksParam(TrackList *projTracks, const wxString &boolValueStr, Setter functPtrToSetter)
 {
    unsigned int i=0;
    TrackListIterator iter(projTracks);

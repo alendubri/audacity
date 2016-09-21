@@ -27,7 +27,7 @@ class wxSizeEvent;
 class SelectionBarListener;
 class NumericTextCtrl;
 
-class SelectionBar:public ToolBar {
+class SelectionBar final : public ToolBar {
 
  public:
 
@@ -36,10 +36,10 @@ class SelectionBar:public ToolBar {
 
    void Create(wxWindow *parent);
 
-   virtual void Populate();
-   virtual void Repaint(wxDC * WXUNUSED(dc)) {};
-   virtual void EnableDisableButtons() {};
-   virtual void UpdatePrefs();
+   void Populate() override;
+   void Repaint(wxDC * WXUNUSED(dc)) override {};
+   void EnableDisableButtons() override {};
+   void UpdatePrefs() override;
 
    void SetTimes(double start, double end, double audio);
    double GetLeftTime();
@@ -49,6 +49,7 @@ class SelectionBar:public ToolBar {
    void SetSelectionFormat(const wxString & format);
    void SetRate(double rate);
    void SetListener(SelectionBarListener *l);
+   void RegenerateTooltips() override;
 
  private:
 
@@ -91,8 +92,8 @@ class SelectionBar:public ToolBar {
 
  public:
 
-   DECLARE_CLASS(SelectionBar);
-   DECLARE_EVENT_TABLE();
+   DECLARE_CLASS(SelectionBar)
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

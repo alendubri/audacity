@@ -52,13 +52,12 @@
 #include "../AllThemeResources.h"
 #include "../ImageManipulation.h"
 #include "../Project.h"
-#ifdef EXPERIMENTAL_SCRUBBING_BASIC
-#include "../TrackPanel.h"
-#endif
 #include "../Theme.h"
-#include "../widgets/AButton.h"
 
 #include "../Experimental.h"
+
+#include "../widgets/AButton.h"
+
 
 IMPLEMENT_CLASS(ToolsToolBar, ToolBar);
 
@@ -85,21 +84,7 @@ ToolsToolBar::ToolsToolBar()
    wxASSERT( drawTool     == drawTool     - firstTool );
    wxASSERT( multiTool    == multiTool    - firstTool );
 
-   {
-#ifdef EXPERIMENTAL_SCRUBBING_BASIC
-
-      mMessageOfTool[selectTool] =
-#if defined(__WXMAC__)
-         _("Click and drag to select audio, Command-Click to scrub, Command-Double-Click to scroll-scrub, Command-drag to seek")
-#else
-         _("Click and drag to select audio, Ctrl-Click to scrub, Ctrl-Double-Click to scroll-scrub, Ctrl-drag to seek")
-#endif
-         ;
-
-#else
-      mMessageOfTool[selectTool] = _("Click and drag to select audio");
-#endif
-   }
+   mMessageOfTool[selectTool] = _("Click and drag to select audio");
 
    mMessageOfTool[envelopeTool] = _("Click and drag to edit the amplitude envelope");
    mMessageOfTool[drawTool] = _("Click and drag to edit the samples");
@@ -124,11 +109,9 @@ ToolsToolBar::ToolsToolBar()
 
 ToolsToolBar::~ToolsToolBar()
 {
-   for (int i = 0; i < 5; i++)
-      delete mTool[i];
 }
 
-void ToolsToolBar::RegenerateToolsTooltips()
+void ToolsToolBar::RegenerateTooltips()
 {
 
 // JKC:
@@ -153,12 +136,28 @@ void ToolsToolBar::RegenerateToolsTooltips()
    //		wxSafeYield(); //Deal with some queued up messages...
 
    #if wxUSE_TOOLTIPS
-   mTool[selectTool]->SetToolTip(_("Selection Tool"));
-   mTool[envelopeTool]->SetToolTip(_("Envelope Tool"));
-   mTool[slideTool]->SetToolTip(_("Time Shift Tool"));
-   mTool[zoomTool]->SetToolTip(_("Zoom Tool"));
-   mTool[drawTool]->SetToolTip(_("Draw Tool"));
-   mTool[multiTool]->SetToolTip(_("Multi-Tool Mode"));
+
+   static const struct Entry {
+      int tool;
+      wxString commandName;
+      wxString untranslatedLabel;
+   } table[] = {
+      { selectTool,   wxT("SelectTool"),    XO("Selection Tool")  },
+      { envelopeTool, wxT("EnvelopeTool"),  XO("Envelope Tool")   },
+      { slideTool,    wxT("TimeShiftTool"), XO("Time Shift Tool") },
+      { zoomTool,     wxT("ZoomTool"),      XO("Zoom Tool")       },
+      { drawTool,     wxT("DrawTool"),      XO("Draw Tool")       },
+      { multiTool,    wxT("MultiTool"),     XO("Multi Tool")      },
+   };
+
+   std::vector<wxString> commands;
+   for (const auto &entry : table) {
+      commands.clear();
+      commands.push_back(wxGetTranslation(entry.untranslatedLabel));
+      commands.push_back(entry.commandName);
+      ToolBar::SetButtonToolTip(*mTool[entry.tool], commands);
+   }
+
    #endif
 
    //		wxSafeYield();
@@ -167,13 +166,13 @@ void ToolsToolBar::RegenerateToolsTooltips()
 
 void ToolsToolBar::UpdatePrefs()
 {
-   RegenerateToolsTooltips();
+   RegenerateTooltips();
 }
 
 AButton * ToolsToolBar::MakeTool( teBmps eTool,
    int id, const wxChar *label)
 {
-   AButton *button = ToolBar::MakeButton(
+   AButton *button = ToolBar::MakeButton(this,
       bmpRecoloredUpSmall, bmpRecoloredDownSmall, bmpRecoloredHiliteSmall,
       eTool, eTool, eTool,
       wxWindowID(id),
@@ -188,8 +187,7 @@ AButton * ToolsToolBar::MakeTool( teBmps eTool,
 void ToolsToolBar::Populate()
 {
    MakeButtonBackgroundsSmall();
-   mToolSizer = new wxGridSizer( 2, 3, 1, 1 );
-   Add( mToolSizer );
+   Add(mToolSizer = safenew wxGridSizer(2, 3, 1, 1));
 
    /* Tools */
    mTool[ selectTool   ] = MakeTool( bmpIBeam, selectTool, _("Selection Tool") );
@@ -201,7 +199,7 @@ void ToolsToolBar::Populate()
 
    mTool[mCurrentTool]->PushDown();
 
-   RegenerateToolsTooltips();
+   RegenerateTooltips();
 }
 
 /// Gets the currently active tool
@@ -219,18 +217,6 @@ void ToolsToolBar::SetCurrentTool(int tool, bool show)
 {
    //In multi-mode the current tool is shown by the
    //cursor icon.  The buttons are not updated.
-
-#ifdef EXPERIMENTAL_SCRUBBING_BASIC
-   if (tool != selectTool) {
-      AudacityProject *p = GetActiveProject();
-      if (p) {
-         TrackPanel *tp = p->GetTrackPanel();
-         if (tp) {
-            tp->StopScrubbing();
-         }
-      }
-   }
-#endif
 
    bool leavingMulticlipMode =
       IsDown(multiTool) && show && tool != multiTool;
@@ -294,18 +280,6 @@ void ToolsToolBar::OnTool(wxCommandEvent & evt)
          mTool[i]->PushDown();
       else
          mTool[i]->PopUp();
-
-#ifdef EXPERIMENTAL_SCRUBBING_BASIC
-   if (0 != mCurrentTool) {
-      AudacityProject *p = GetActiveProject();
-      if (p) {
-         TrackPanel *tp = p->GetTrackPanel();
-         if (tp) {
-            tp->StopScrubbing();
-         }
-      }
-   }
-#endif
 
    RedrawAllProjects();
 

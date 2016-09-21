@@ -26,7 +26,7 @@ class ShuttleGui;
 
 struct Reverb_priv_t;
 
-class EffectReverb : public Effect
+class EffectReverb final : public Effect
 {
 public:
    EffectReverb();
@@ -48,24 +48,24 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual bool ProcessFinalize();
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
-   virtual wxArrayString GetFactoryPresets();
-   virtual bool LoadFactoryPreset(int id);
+   unsigned GetAudioInCount() override;
+   unsigned GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   bool ProcessFinalize() override;
+   size_t ProcessBlock(float **inBlock, float **outBlock, size_t blockLen) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
+   wxArrayString GetFactoryPresets() override;
+   bool LoadFactoryPreset(int id) override;
 
    // Effect implementation
 
@@ -83,20 +83,20 @@ private:
    void On ## n ## Slider(wxCommandEvent & evt); \
    void On ## n ## Text(wxCommandEvent & evt);
 
-   SpinSliderHandlers(RoomSize);
-   SpinSliderHandlers(PreDelay);
-   SpinSliderHandlers(Reverberance);
-   SpinSliderHandlers(HfDamping);
-   SpinSliderHandlers(ToneLow);
-   SpinSliderHandlers(ToneHigh);
-   SpinSliderHandlers(WetGain);
-   SpinSliderHandlers(DryGain);
-   SpinSliderHandlers(StereoWidth);
+   SpinSliderHandlers(RoomSize)
+   SpinSliderHandlers(PreDelay)
+   SpinSliderHandlers(Reverberance)
+   SpinSliderHandlers(HfDamping)
+   SpinSliderHandlers(ToneLow)
+   SpinSliderHandlers(ToneHigh)
+   SpinSliderHandlers(WetGain)
+   SpinSliderHandlers(DryGain)
+   SpinSliderHandlers(StereoWidth)
 
 #undef SpinSliderHandlers
 
 private:
-   int mNumChans;
+   unsigned mNumChans {};
    Reverb_priv_t *mP;
 
    Params mParams;
@@ -107,21 +107,21 @@ private:
    wxSpinCtrl  *m ## n ## T; \
    wxSlider    *m ## n ## S;
 
-   SpinSlider(RoomSize);
-   SpinSlider(PreDelay);
-   SpinSlider(Reverberance);
-   SpinSlider(HfDamping);
-   SpinSlider(ToneLow);
-   SpinSlider(ToneHigh);
-   SpinSlider(WetGain);
-   SpinSlider(DryGain);
-   SpinSlider(StereoWidth);
+   SpinSlider(RoomSize)
+   SpinSlider(PreDelay)
+   SpinSlider(Reverberance)
+   SpinSlider(HfDamping)
+   SpinSlider(ToneLow)
+   SpinSlider(ToneHigh)
+   SpinSlider(WetGain)
+   SpinSlider(DryGain)
+   SpinSlider(StereoWidth)
 
 #undef SpinSlider
 
    wxCheckBox  *mWetOnlyC;
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

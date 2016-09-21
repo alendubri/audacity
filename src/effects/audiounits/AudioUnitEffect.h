@@ -14,6 +14,8 @@
 
 #if USE_AUDIO_UNITS
 
+#include "../../MemoryX.h"
+#include <vector>
 #include <wx/dialog.h>
 
 #include <AudioToolbox/AudioUnitUtilities.h>
@@ -31,7 +33,7 @@
 
 class AudioUnitEffect;
 
-WX_DEFINE_ARRAY_PTR(AudioUnitEffect *, AudioUnitEffectArray);
+using AudioUnitEffectArray = std::vector<movable_ptr<AudioUnitEffect>>;
 
 class AudioUnitEffectExportDialog;
 class AudioUnitEffectImportDialog;
@@ -49,83 +51,83 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetPath();
-   virtual wxString GetSymbol();
-   virtual wxString GetName();
-   virtual wxString GetVendor();
-   virtual wxString GetVersion();
-   virtual wxString GetDescription();
+   wxString GetPath() override;
+   wxString GetSymbol() override;
+   wxString GetName() override;
+   wxString GetVendor() override;
+   wxString GetVersion() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual wxString GetFamily();
-   virtual bool IsInteractive();
-   virtual bool IsDefault();
-   virtual bool IsLegacy();
-   virtual bool SupportsRealtime();
-   virtual bool SupportsAutomation();
+   EffectType GetType() override;
+   wxString GetFamily() override;
+   bool IsInteractive() override;
+   bool IsDefault() override;
+   bool IsLegacy() override;
+   bool SupportsRealtime() override;
+   bool SupportsAutomation() override;
 
    // EffectClientInterface implementation
 
-   virtual bool SetHost(EffectHostInterface *host);
+   bool SetHost(EffectHostInterface *host) override;
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
+   unsigned GetAudioInCount() override;
+   unsigned GetAudioOutCount() override;
 
-   virtual int GetMidiInCount();
-   virtual int GetMidiOutCount();
+   int GetMidiInCount() override;
+   int GetMidiOutCount() override;
 
-   virtual void SetSampleRate(sampleCount rate);
-   virtual sampleCount SetBlockSize(sampleCount maxBlockSize);
+   void SetSampleRate(double rate) override;
+   size_t SetBlockSize(size_t maxBlockSize) override;
 
-   virtual sampleCount GetLatency();
-   virtual sampleCount GetTailSize();
+   sampleCount GetLatency() override;
+   size_t GetTailSize() override;
 
-   virtual bool IsReady();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual bool ProcessFinalize();
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
+   bool IsReady() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   bool ProcessFinalize() override;
+   size_t ProcessBlock(float **inBlock, float **outBlock, size_t blockLen) override;
 
-   virtual bool RealtimeInitialize();
-   virtual bool RealtimeAddProcessor(int numChannels, float sampleRate);
-   virtual bool RealtimeFinalize();
-   virtual bool RealtimeSuspend();
-   virtual bool RealtimeResume();
-   virtual bool RealtimeProcessStart();
-   virtual sampleCount RealtimeProcess(int group,
+   bool RealtimeInitialize() override;
+   bool RealtimeAddProcessor(unsigned numChannels, float sampleRate) override;
+   bool RealtimeFinalize() override;
+   bool RealtimeSuspend() override;
+   bool RealtimeResume() override;
+   bool RealtimeProcessStart() override;
+   size_t RealtimeProcess(int group,
                                        float **inbuf,
                                        float **outbuf,
-                                       sampleCount numSamples);
-   virtual bool RealtimeProcessEnd();
+                                       size_t numSamples) override;
+   bool RealtimeProcessEnd() override;
 
-   virtual bool ShowInterface(wxWindow *parent, bool forceModal = false);
+   bool ShowInterface(wxWindow *parent, bool forceModal = false) override;
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
-   virtual bool LoadUserPreset(const wxString & name);
-   virtual bool SaveUserPreset(const wxString & name);
+   bool LoadUserPreset(const wxString & name) override;
+   bool SaveUserPreset(const wxString & name) override;
 
-   virtual bool LoadFactoryPreset(int id);
-   virtual bool LoadFactoryDefaults();
-   virtual wxArrayString GetFactoryPresets();
+   bool LoadFactoryPreset(int id) override;
+   bool LoadFactoryDefaults() override;
+   wxArrayString GetFactoryPresets() override;
 
    // EffectUIClientInterface implementation
 
-   virtual void SetHostUI(EffectUIHostInterface *host);
-   virtual bool PopulateUI(wxWindow *parent);
-   virtual bool IsGraphicalUI();
-   virtual bool ValidateUI();
-   virtual bool HideUI();
-   virtual bool CloseUI();
+   void SetHostUI(EffectUIHostInterface *host) override;
+   bool PopulateUI(wxWindow *parent) override;
+   bool IsGraphicalUI() override;
+   bool ValidateUI() override;
+   bool HideUI() override;
+   bool CloseUI() override;
 
-   virtual bool CanExportPresets();
-   virtual void ExportPresets();
-   virtual void ImportPresets();
+   bool CanExportPresets() override;
+   void ExportPresets() override;
+   void ImportPresets() override;
 
-   virtual bool HasOptions();
-   virtual void ShowOptions();
+   bool HasOptions() override;
+   void ShowOptions() override;
 
    // AudioUnitEffect implementation
    
@@ -135,8 +137,8 @@ private:
    bool CopyParameters(AudioUnit srcUnit, AudioUnit dstUnit);
 
    // Realtime
-   int GetChannelCount();
-   void SetChannelCount(int numChannels);
+   unsigned GetChannelCount();
+   void SetChannelCount(unsigned numChannels);
    
    static OSStatus RenderCallback(void *inRefCon,
                                   AudioUnitRenderActionFlags *inActionFlags,
@@ -179,7 +181,7 @@ private:
    bool mSupportsStereo;
 
    EffectHostInterface *mHost;
-   int mAudioIns;
+   unsigned mAudioIns;
    int mAudioOuts;
    bool mInteractive;
    bool mLatencyDone;
@@ -198,16 +200,15 @@ private:
    EffectUIHostInterface *mUIHost;
    wxWindow *mParent;
    wxDialog *mDialog;
-   AUControl *mControl;
    wxString mUIType;
    bool mIsGraphical;
 
    AudioUnitEffect *mMaster;     // non-NULL if a slave
    AudioUnitEffectArray mSlaves;
-   int mNumChannels;
+   unsigned mNumChannels;
    float **mMasterIn;
    float **mMasterOut;
-   sampleCount mNumSamples;
+   size_t mNumSamples;
    
    AUEventListenerRef mEventListenerRef;
 
@@ -221,7 +222,7 @@ private:
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class AudioUnitEffectsModule : public ModuleInterface
+class AudioUnitEffectsModule final : public ModuleInterface
 {
 public:
    AudioUnitEffectsModule(ModuleManagerInterface *moduleManager, const wxString *path);
@@ -229,26 +230,26 @@ public:
 
    // IdentInterface implementatino
 
-   virtual wxString GetPath();
-   virtual wxString GetSymbol();
-   virtual wxString GetName();
-   virtual wxString GetVendor();
-   virtual wxString GetVersion();
-   virtual wxString GetDescription();
+   wxString GetPath() override;
+   wxString GetSymbol() override;
+   wxString GetName() override;
+   wxString GetVendor() override;
+   wxString GetVersion() override;
+   wxString GetDescription() override;
 
    // ModuleInterface implementation
 
-   virtual bool Initialize();
-   virtual void Terminate();
+   bool Initialize() override;
+   void Terminate() override;
 
-   virtual bool AutoRegisterPlugins(PluginManagerInterface & pm);
-   virtual wxArrayString FindPlugins(PluginManagerInterface & pm);
-   virtual bool RegisterPlugin(PluginManagerInterface & pm, const wxString & path);
+   bool AutoRegisterPlugins(PluginManagerInterface & pm) override;
+   wxArrayString FindPlugins(PluginManagerInterface & pm) override;
+   bool RegisterPlugin(PluginManagerInterface & pm, const wxString & path) override;
 
-   virtual bool IsPluginValid(const wxString & path);
+   bool IsPluginValid(const wxString & path) override;
 
-   virtual IdentInterface *CreateInstance(const wxString & path);
-   virtual void DeleteInstance(IdentInterface *instance);
+   IdentInterface *CreateInstance(const wxString & path) override;
+   void DeleteInstance(IdentInterface *instance) override;
 
    // AudioUnitEffectModule implementation
 

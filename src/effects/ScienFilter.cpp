@@ -205,12 +205,12 @@ EffectType EffectScienFilter::GetType()
 
 // EffectClientInterface implementation
 
-int EffectScienFilter::GetAudioInCount()
+unsigned EffectScienFilter::GetAudioInCount()
 {
    return 1;
 }
 
-int EffectScienFilter::GetAudioOutCount()
+unsigned EffectScienFilter::GetAudioOutCount()
 {
    return 1;
 }
@@ -228,7 +228,7 @@ bool EffectScienFilter::ProcessInitialize(sampleCount WXUNUSED(totalLen), Channe
    return true;
 }
 
-sampleCount EffectScienFilter::ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen)
+size_t EffectScienFilter::ProcessBlock(float **inBlock, float **outBlock, size_t blockLen)
 {
    float *ibuf = inBlock[0];
    for (int iPair = 0; iPair < (mOrder + 1) / 2; iPair++)
@@ -339,7 +339,7 @@ bool EffectScienFilter::Init()
 
    while (t)
    {
-      if (t->GetSelected() && t->GetKind() == Track::Wave)
+      if (t->GetSelected())
       {
          if (selcount == 0)
          {
@@ -363,7 +363,7 @@ bool EffectScienFilter::Init()
 
 void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 {
-   wxWindow *parent = S.GetParent();
+   wxWindow *const parent = S.GetParent();
 
    S.AddSpace(5);
    S.SetSizerProportion(1);
@@ -378,7 +378,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 
       S.StartVerticalLay();
       {
-         mdBRuler = new RulerPanel(parent, wxID_ANY);
+         mdBRuler = safenew RulerPanel(parent, wxID_ANY);
          mdBRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
          mdBRuler->ruler.SetOrientation(wxVERTICAL);
          mdBRuler->ruler.SetRange(30.0, -120.0);
@@ -397,7 +397,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
       }
       S.EndVerticalLay();
 
-      mPanel = new EffectScienFilterPanel(this, parent);
+      mPanel = safenew EffectScienFilterPanel(this, parent);
       mPanel->SetFreqRange(mLoFreq, mNyquist);
 
       S.SetBorder(5);
@@ -412,7 +412,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
          mdBMaxSlider = S.Id(ID_dBMax).AddSlider(wxT(""), 10, 20, 0);
 #if wxUSE_ACCESSIBILITY
          mdBMaxSlider->SetName(_("Max dB"));
-         mdBMaxSlider->SetAccessible(new SliderAx(mdBMaxSlider, wxString(wxT("%d ")) + _("dB")));
+         mdBMaxSlider->SetAccessible(safenew SliderAx(mdBMaxSlider, wxString(wxT("%d ")) + _("dB")));
 #endif
 
          S.SetStyle(wxSL_VERTICAL | wxSL_INVERSE);
@@ -420,7 +420,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
          S.AddVariableText(_("- dB"), false, wxCENTER);
 #if wxUSE_ACCESSIBILITY
          mdBMinSlider->SetName(_("Min dB"));
-         mdBMinSlider->SetAccessible(new SliderAx(mdBMinSlider, wxString(wxT("%d ")) + _("dB")));
+         mdBMinSlider->SetAccessible(safenew SliderAx(mdBMinSlider, wxString(wxT("%d ")) + _("dB")));
 #endif
       }
       S.EndVerticalLay();
@@ -431,7 +431,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 
       S.AddSpace(1, 1);
 
-      mfreqRuler  = new RulerPanel(parent, wxID_ANY);
+      mfreqRuler  = safenew RulerPanel(parent, wxID_ANY);
       mfreqRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
       mfreqRuler->ruler.SetOrientation(wxHORIZONTAL);
       mfreqRuler->ruler.SetLog(true);
@@ -1008,13 +1008,13 @@ void EffectScienFilter::EnableDisableRippleCtl(int FilterType)
 // EffectScienFilterPanel
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(EffectScienFilterPanel, wxPanel)
+BEGIN_EVENT_TABLE(EffectScienFilterPanel, wxPanelWrapper)
     EVT_PAINT(EffectScienFilterPanel::OnPaint)
     EVT_SIZE(EffectScienFilterPanel::OnSize)
 END_EVENT_TABLE()
 
 EffectScienFilterPanel::EffectScienFilterPanel(EffectScienFilter *effect, wxWindow *parent)
-:  wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(400, 200))
+:  wxPanelWrapper(parent, wxID_ANY, wxDefaultPosition, wxSize(400, 200))
 {
    mEffect = effect;
    mParent = parent;
@@ -1030,10 +1030,6 @@ EffectScienFilterPanel::EffectScienFilterPanel(EffectScienFilter *effect, wxWind
 
 EffectScienFilterPanel::~EffectScienFilterPanel()
 {
-   if (mBitmap)
-   {
-      delete mBitmap;
-   }
 }
 
 void EffectScienFilterPanel::SetFreqRange(double lo, double hi)
@@ -1055,6 +1051,11 @@ bool EffectScienFilterPanel::AcceptsFocus() const
    return false;
 }
 
+bool EffectScienFilterPanel::AcceptsFocusFromKeyboard() const
+{
+   return false;
+}
+
 void EffectScienFilterPanel::OnSize(wxSizeEvent & WXUNUSED(evt))
 {
    Refresh(false);
@@ -1068,14 +1069,9 @@ void EffectScienFilterPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
 
    if (!mBitmap || mWidth != width || mHeight != height)
    {
-      if (mBitmap)
-      {
-         delete mBitmap;
-      }
-
       mWidth = width;
       mHeight = height;
-      mBitmap = new wxBitmap(mWidth, mHeight);
+      mBitmap = std::make_unique<wxBitmap>(mWidth, mHeight);
    }
 
    wxBrush bkgndBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_3DFACE));

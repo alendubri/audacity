@@ -152,7 +152,7 @@ static void Yield()
    }
 }
 
-void ScreenshotCommand::Capture(wxString filename,
+void ScreenshotCommand::Capture(const wxString &filename,
                           wxWindow *window,
                           int x, int y, int width, int height,
                           bool bg)
@@ -170,7 +170,11 @@ void ScreenshotCommand::Capture(wxString filename,
 
    int screenW, screenH;
    wxDisplaySize(&screenW, &screenH);
-   wxBitmap full(screenW, screenH);
+   // Bug 1378 workaround.
+   // wx 3.0.2 has a bug in Blit from ScreenDC where in default mode 
+   // much is drawn transparent - including for example black text!
+   // Forcing 24 bit here is a workaround.
+   wxBitmap full(screenW, screenH, 24);
 
    wxScreenDC screenDC;
    wxMemoryDC fullDC;
@@ -226,7 +230,7 @@ void ScreenshotCommand::Capture(wxString filename,
    ::wxBell();
 }
 
-void ScreenshotCommand::CaptureToolbar(ToolManager *man, int type, wxString name)
+void ScreenshotCommand::CaptureToolbar(ToolManager *man, int type, const wxString &name)
 {
    bool visible = man->IsVisible(type);
    if (!visible) {
@@ -251,7 +255,7 @@ void ScreenshotCommand::CaptureToolbar(ToolManager *man, int type, wxString name
    }
 }
 
-void ScreenshotCommand::CaptureDock(wxWindow *win, wxString fileName)
+void ScreenshotCommand::CaptureDock(wxWindow *win, const wxString &fileName)
 {
    int x = 0, y = 0;
    int width, height;
@@ -270,7 +274,7 @@ wxString ScreenshotCommandType::BuildName()
 
 void ScreenshotCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *captureModeValidator = new OptionValidator();
+   auto captureModeValidator = make_movable<OptionValidator>();
    captureModeValidator->AddOption(wxT("window"));
    captureModeValidator->AddOption(wxT("fullwindow"));
    captureModeValidator->AddOption(wxT("windowplus"));
@@ -290,28 +294,28 @@ void ScreenshotCommandType::BuildSignature(CommandSignature &signature)
    captureModeValidator->AddOption(wxT("firsttrack"));
    captureModeValidator->AddOption(wxT("secondtrack"));
 
-   OptionValidator *backgroundValidator = new OptionValidator();
+   auto backgroundValidator = make_movable<OptionValidator>();
    backgroundValidator->AddOption(wxT("Blue"));
    backgroundValidator->AddOption(wxT("White"));
    backgroundValidator->AddOption(wxT("None"));
 
-   Validator *filePathValidator = new Validator();
+   auto filePathValidator = make_movable<DefaultValidator>();
 
    signature.AddParameter(wxT("CaptureMode"),
                           wxT("fullscreen"),
-                          captureModeValidator);
+                          std::move(captureModeValidator));
    signature.AddParameter(wxT("Background"),
                           wxT("None"),
-                          backgroundValidator);
-   signature.AddParameter(wxT("FilePath"), wxT(""), filePathValidator);
+                          std::move(backgroundValidator));
+   signature.AddParameter(wxT("FilePath"), wxT(""), std::move(filePathValidator));
 }
 
-Command *ScreenshotCommandType::Create(CommandOutputTarget *target)
+CommandHolder ScreenshotCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new ScreenshotCommand(*this, target);
+   return std::make_shared<ScreenshotCommand>(*this, std::move(target));
 }
 
-wxString ScreenshotCommand::MakeFileName(wxString path, wxString basename)
+wxString ScreenshotCommand::MakeFileName(const wxString &path, const wxString &basename)
 {
    wxFileName prefixPath;
    prefixPath.AssignDir(path);
@@ -355,7 +359,7 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
 
    // Reset the toolbars to a known state
-   context.GetProject()->mToolManager->Reset();
+   context.GetProject()->GetToolManager()->Reset();
 
    wxTopLevelWindow *w = GetFrontWindow(context.GetProject());
    if (!w)
@@ -418,43 +422,47 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
    else if (captureMode.IsSameAs(wxT("toolbars")))
    {
-      CaptureDock(context.GetProject()->mToolManager->GetTopDock(), fileName);
+      CaptureDock(context.GetProject()->GetToolManager()->GetTopDock(), fileName);
    }
    else if (captureMode.IsSameAs(wxT("selectionbar")))
    {
-      CaptureDock(context.GetProject()->mToolManager->GetBotDock(), fileName);
+      CaptureDock(context.GetProject()->GetToolManager()->GetBotDock(), fileName);
    }
    else if (captureMode.IsSameAs(wxT("tools")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, ToolsBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), ToolsBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("transport")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, TransportBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), TransportBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("mixer")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, MixerBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), MixerBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("meter")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, MeterBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), MeterBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("edit")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, EditBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), EditBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("device")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, DeviceBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), DeviceBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("transcription")))
    {
-      CaptureToolbar(context.GetProject()->mToolManager, TranscriptionBarID, fileName);
+      CaptureToolbar(context.GetProject()->GetToolManager(), TranscriptionBarID, fileName);
+   }
+   else if (captureMode.IsSameAs(wxT("scrubbing")))
+   {
+      CaptureToolbar(context.GetProject()->GetToolManager(), ScrubbingBarID, fileName);
    }
    else if (captureMode.IsSameAs(wxT("trackpanel")))
    {
-      TrackPanel *panel = context.GetProject()->mTrackPanel;
+      TrackPanel *panel = context.GetProject()->GetTrackPanel();
       //AdornedRulerPanel *ruler = panel->mRuler;
 
       int h = panel->mRuler->GetRulerHeight();
@@ -469,7 +477,7 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
    else if (captureMode.IsSameAs(wxT("ruler")))
    {
-      TrackPanel *panel = context.GetProject()->mTrackPanel;
+      TrackPanel *panel = context.GetProject()->GetTrackPanel();
       AdornedRulerPanel *ruler = panel->mRuler;
 
       int x = 0, y = 0;
@@ -484,7 +492,7 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
    else if (captureMode.IsSameAs(wxT("tracks")))
    {
-      TrackPanel *panel = context.GetProject()->mTrackPanel;
+      TrackPanel *panel = context.GetProject()->GetTrackPanel();
 
       int x = 0, y = 0;
       int width, height;
@@ -497,7 +505,7 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
    else if (captureMode.IsSameAs(wxT("firsttrack")))
    {
-      TrackPanel *panel = context.GetProject()->mTrackPanel;
+      TrackPanel *panel = context.GetProject()->GetTrackPanel();
       TrackListIterator iter(context.GetProject()->GetTracks());
       Track * t = iter.First();
       if (!t) {
@@ -517,7 +525,7 @@ bool ScreenshotCommand::Apply(CommandExecutionContext context)
    }
    else if (captureMode.IsSameAs(wxT("secondtrack")))
    {
-      TrackPanel *panel = context.GetProject()->mTrackPanel;
+      TrackPanel *panel = context.GetProject()->GetTrackPanel();
       TrackListIterator iter(context.GetProject()->GetTracks());
       Track * t = iter.First();
       if (!t) {

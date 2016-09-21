@@ -36,7 +36,7 @@ default is to disable caching.
   memory, so they are never read from disk in the current session.
 
 * Write-caching: If caching is enabled and the parameter allowDeferredWrite
-  is enabled at the block file constructor, new block files are held in memory
+  is enabled at the block file constructor, NEW block files are held in memory
   and written to disk only when WriteCacheToDisk() is called. This is used
   during recording to prevent disk access. After recording, WriteCacheToDisk()
   will be called on all block files and they will be written to disk. During
@@ -70,6 +70,7 @@ to get its definition, rather than rolling our own.
 
 #include "sndfile.h"
 #include "../Internat.h"
+#include "../MemoryX.h"
 
 
 static wxUint32 SwapUintEndianess(wxUint32 in)
@@ -94,12 +95,15 @@ static wxUint32 SwapUintEndianess(wxUint32 in)
 /// @param sampleLen    The number of samples to be written to this block.
 /// @param format       The format of the given samples.
 /// @param allowDeferredWrite    Allow deferred write-caching
-SimpleBlockFile::SimpleBlockFile(wxFileName baseFileName,
-                                 samplePtr sampleData, sampleCount sampleLen,
+SimpleBlockFile::SimpleBlockFile(wxFileNameWrapper &&baseFileName,
+                                 samplePtr sampleData, size_t sampleLen,
                                  sampleFormat format,
                                  bool allowDeferredWrite /* = false */,
                                  bool bypassCache /* = false */):
-   BlockFile(wxFileName(baseFileName.GetFullPath() + wxT(".au")), sampleLen)
+   BlockFile {
+      (baseFileName.SetExt(wxT("au")), std::move(baseFileName)),
+      sampleLen
+   }
 {
    mFormat = format;
 
@@ -111,6 +115,7 @@ SimpleBlockFile::SimpleBlockFile(wxFileName baseFileName,
    {
       bool bSuccess = WriteSimpleBlockFile(sampleData, sampleLen, format, NULL);
       wxASSERT(bSuccess); // TODO: Handle failure here by alert to user and undo partial op.
+      wxUnusedVar(bSuccess);
    }
 
    if (useCache) {
@@ -118,11 +123,12 @@ SimpleBlockFile::SimpleBlockFile(wxFileName baseFileName,
       mCache.active = true;
       mCache.needWrite = true;
       mCache.format = format;
-      mCache.sampleData = new char[sampleLen * SAMPLE_SIZE(format)];
-      memcpy(mCache.sampleData,
-             sampleData, sampleLen * SAMPLE_SIZE(format));
+      const auto sampleDataSize = sampleLen * SAMPLE_SIZE(format);
+      mCache.sampleData = new char[sampleDataSize];
+      memcpy(mCache.sampleData, sampleData, sampleDataSize);
+      ArrayOf<char> cleanup;
       void* summaryData = BlockFile::CalcSummary(sampleData, sampleLen,
-                                                format);
+         format, cleanup);
       mCache.summaryData = new char[mSummaryInfo.totalSummaryBytes];
       memcpy(mCache.summaryData, summaryData,
              (size_t)mSummaryInfo.totalSummaryBytes);
@@ -133,9 +139,9 @@ SimpleBlockFile::SimpleBlockFile(wxFileName baseFileName,
 /// existing block file.  This file must exist and be a valid block file.
 ///
 /// @param existingFile The disk file this SimpleBlockFile should use.
-SimpleBlockFile::SimpleBlockFile(wxFileName existingFile, sampleCount len,
+SimpleBlockFile::SimpleBlockFile(wxFileNameWrapper &&existingFile, size_t len,
                                  float min, float max, float rms):
-   BlockFile(existingFile, len)
+   BlockFile{ std::move(existingFile), len }
 {
    // Set an invalid format to force GetSpaceUsage() to read it from the file.
    mFormat = (sampleFormat) 0;
@@ -158,7 +164,7 @@ SimpleBlockFile::~SimpleBlockFile()
 
 bool SimpleBlockFile::WriteSimpleBlockFile(
     samplePtr sampleData,
-    sampleCount sampleLen,
+    size_t sampleLen,
     sampleFormat format,
     void* summaryData)
 {
@@ -205,8 +211,11 @@ bool SimpleBlockFile::WriteSimpleBlockFile(
    header.channels = 1;
 
    // Write the file
+   ArrayOf<char> cleanup;
    if (!summaryData)
-      summaryData = /*BlockFile::*/CalcSummary(sampleData, sampleLen, format); //mchinen:allowing virtual override of calc summary for ODDecodeBlockFile.
+      summaryData = /*BlockFile::*/CalcSummary(sampleData, sampleLen, format, cleanup);
+      //mchinen:allowing virtual override of calc summary for ODDecodeBlockFile.
+      // PRL: cleanup fixes a possible memory leak!
 
    size_t nBytesToWrite = sizeof(header);
    size_t nBytesWritten = file.Write(&header, nBytesToWrite);
@@ -260,7 +269,7 @@ bool SimpleBlockFile::WriteSimpleBlockFile(
       }
    }
 
-    return true;
+   return true;
 }
 
 void SimpleBlockFile::FillCache()
@@ -345,24 +354,22 @@ bool SimpleBlockFile::ReadSummary(void *data)
 
       wxFFile file(mFileName.GetFullPath(), wxT("rb"));
 
-      wxLogNull *silence=0;
-      if(mSilentLog)silence= new wxLogNull();
-
-      if(!file.IsOpened() ){
-
-         memset(data,0,(size_t)mSummaryInfo.totalSummaryBytes);
-
-         if(silence) delete silence;
-         mSilentLog=TRUE;
-
-         return true;
-
+      {
+         Maybe<wxLogNull> silence{};
+         if (mSilentLog)
+            silence.create();
+         // FIXME: TRAP_ERR no report to user of absent summary files?
+         // filled with zero instead.
+         if (!file.IsOpened()){
+            memset(data, 0, (size_t)mSummaryInfo.totalSummaryBytes);
+            mSilentLog = TRUE;
+            return true;
+         }
       }
-
-      if(silence) delete silence;
       mSilentLog=FALSE;
 
       // The offset is just past the au header
+      // FIXME: Seek in summary file could fail.
       if( !file.Seek(sizeof(auHeader)) )
          return false;
 
@@ -381,69 +388,71 @@ bool SimpleBlockFile::ReadSummary(void *data)
 /// @param format The format the data will be stored in
 /// @param start  The offset in this block file
 /// @param len    The number of samples to read
-int SimpleBlockFile::ReadData(samplePtr data, sampleFormat format,
-                        sampleCount start, sampleCount len)
+size_t SimpleBlockFile::ReadData(samplePtr data, sampleFormat format,
+                        size_t start, size_t len) const
 {
    if (mCache.active)
    {
       //wxLogDebug("SimpleBlockFile::ReadData(): Data are already in cache.");
 
-      if (len > mLen - start)
-         len = mLen - start;
+      len = std::min(len, std::max(start, mLen) - start);
       CopySamples(
          (samplePtr)(((char*)mCache.sampleData) +
             start * SAMPLE_SIZE(mCache.format)),
          mCache.format, data, format, len);
       return len;
-   } else
-   {
+   }
+   else {
       //wxLogDebug("SimpleBlockFile::ReadData(): Reading data from disk.");
 
       SF_INFO info;
-      wxLogNull *silence=0;
-      if(mSilentLog)silence= new wxLogNull();
-
-      memset(&info, 0, sizeof(info));
-
       wxFile f;   // will be closed when it goes out of scope
-      SNDFILE *sf = NULL;
+      SFFile sf;
+      {
+         Maybe<wxLogNull> silence{};
+         if (mSilentLog)
+            silence.create();
 
-      if (f.Open(mFileName.GetFullPath())) {
-         // Even though there is an sf_open() that takes a filename, use the one that
-         // takes a file descriptor since wxWidgets can open a file with a Unicode name and
-         // libsndfile can't (under Windows).
-         sf = sf_open_fd(f.fd(), SFM_READ, &info, FALSE);
+         memset(&info, 0, sizeof(info));
+
+         if (f.Open(mFileName.GetFullPath())) {
+            // Even though there is an sf_open() that takes a filename, use the one that
+            // takes a file descriptor since wxWidgets can open a file with a Unicode name and
+            // libsndfile can't (under Windows).
+            sf.reset(SFCall<SNDFILE*>(sf_open_fd, f.fd(), SFM_READ, &info, FALSE));
+         }
+         // FIXME: TRAP_ERR failure of wxFile open incompletely handled in SimpleBlockFile::ReadData.
+         // FIXME: Too much cut and paste code between the different block file types.
+
+
+         if (!sf) {
+
+            memset(data, 0, SAMPLE_SIZE(format)*len);
+
+            mSilentLog = TRUE;
+
+            return len;
+         }
       }
-
-      if (!sf) {
-
-         memset(data,0,SAMPLE_SIZE(format)*len);
-
-         if(silence) delete silence;
-         mSilentLog=TRUE;
-
-         return len;
-      }
-      if(silence) delete silence;
       mSilentLog=FALSE;
 
-      sf_seek(sf, start, SEEK_SET);
-      samplePtr buffer = NewSamples(len, floatSample);
+      SFCall<sf_count_t>(sf_seek, sf.get(), start, SEEK_SET);
+      SampleBuffer buffer(len, floatSample);
 
-      int framesRead = 0;
+      size_t framesRead = 0;
 
       // If both the src and dest formats are integer formats,
       // read integers from the file (otherwise we would be
       // converting to float and back, which is unneccesary)
       if (format == int16Sample &&
           sf_subtype_is_integer(info.format)) {
-         framesRead = sf_readf_short(sf, (short *)data, len);
+         framesRead = SFCall<sf_count_t>(sf_readf_short, sf.get(), (short *)data, len);
       }
       else
       if (format == int24Sample &&
           sf_subtype_is_integer(info.format))
       {
-         framesRead = sf_readf_int(sf, (int *)data, len);
+         framesRead = SFCall<sf_count_t>(sf_readf_int, sf.get(), (int *)data, len);
 
          // libsndfile gave us the 3 byte sample in the 3 most
          // significant bytes -- we want it in the 3 least
@@ -456,14 +465,10 @@ int SimpleBlockFile::ReadData(samplePtr data, sampleFormat format,
          // Otherwise, let libsndfile handle the conversion and
          // scaling, and pass us normalized data as floats.  We can
          // then convert to whatever format we want.
-         framesRead = sf_readf_float(sf, (float *)buffer, len);
-         CopySamples(buffer, floatSample,
+         framesRead = SFCall<sf_count_t>(sf_readf_float, sf.get(), (float *)buffer.ptr(), len);
+         CopySamples(buffer.ptr(), floatSample,
                      (samplePtr)data, format, framesRead);
       }
-
-      DeleteSamples(buffer);
-
-      sf_close(sf);
 
       return framesRead;
    }
@@ -486,11 +491,11 @@ void SimpleBlockFile::SaveXML(XMLWriter &xmlFile)
 // even if the result is flawed (e.g., refers to nonexistent file),
 // as testing will be done in DirManager::ProjectFSCK().
 /// static
-BlockFile *SimpleBlockFile::BuildFromXML(DirManager &dm, const wxChar **attrs)
+BlockFilePtr SimpleBlockFile::BuildFromXML(DirManager &dm, const wxChar **attrs)
 {
-   wxFileName fileName;
+   wxFileNameWrapper fileName;
    float min = 0.0f, max = 0.0f, rms = 0.0f;
-   sampleCount len = 0;
+   size_t len = 0;
    double dblValue;
    long nValue;
 
@@ -526,21 +531,22 @@ BlockFile *SimpleBlockFile::BuildFromXML(DirManager &dm, const wxChar **attrs)
       }
    }
 
-   return new SimpleBlockFile(fileName, len, min, max, rms);
+   return make_blockfile<SimpleBlockFile>
+      (std::move(fileName), len, min, max, rms);
 }
 
 /// Create a copy of this BlockFile, but using a different disk file.
 ///
-/// @param newFileName The name of the new file to use.
-BlockFile *SimpleBlockFile::Copy(wxFileName newFileName)
+/// @param newFileName The name of the NEW file to use.
+BlockFilePtr SimpleBlockFile::Copy(wxFileNameWrapper &&newFileName)
 {
-   BlockFile *newBlockFile = new SimpleBlockFile(newFileName, mLen,
-                                                 mMin, mMax, mRMS);
+   auto newBlockFile = make_blockfile<SimpleBlockFile>
+      (std::move(newFileName), mLen, mMin, mMax, mRMS);
 
    return newBlockFile;
 }
 
-wxLongLong SimpleBlockFile::GetSpaceUsage()
+auto SimpleBlockFile::GetSpaceUsage() const -> DiskByteCount
 {
    if (mCache.active && mCache.needWrite)
    {
@@ -591,14 +597,16 @@ wxLongLong SimpleBlockFile::GetSpaceUsage()
       file.Close();
    }
 
-   return sizeof(auHeader) + 
+   return {
+          sizeof(auHeader) +
           mSummaryInfo.totalSummaryBytes +
-          (GetLength() * SAMPLE_SIZE_DISK(mFormat));
+          (GetLength() * SAMPLE_SIZE_DISK(mFormat))
+   };
 }
 
 void SimpleBlockFile::Recover(){
    wxFFile file(mFileName.GetFullPath(), wxT("wb"));
-   int i;
+   //int i;
 
    if( !file.IsOpened() ){
       // Can't do anything else.
@@ -616,10 +624,11 @@ void SimpleBlockFile::Recover(){
    header.channels = 1;
    file.Write(&header, sizeof(header));
 
-   for(i=0;i<mSummaryInfo.totalSummaryBytes;i++)
+   for(decltype(mSummaryInfo.totalSummaryBytes) i = 0;
+       i < mSummaryInfo.totalSummaryBytes; i++)
       file.Write(wxT("\0"),1);
 
-   for(i=0;i<mLen*2;i++)
+   for(decltype(mLen) i = 0; i < mLen * 2; i++)
       file.Write(wxT("\0"),1);
 
 }

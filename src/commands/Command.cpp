@@ -39,19 +39,18 @@ void DecoratedCommand::Progress(double completed)
    mCommand->Progress(completed);
 }
 
-void DecoratedCommand::Status(wxString message)
+void DecoratedCommand::Status(const wxString &message)
 {
    mCommand->Status(message);
 }
 
-void DecoratedCommand::Error(wxString message)
+void DecoratedCommand::Error(const wxString &message)
 {
    mCommand->Error(message);
 }
 
 DecoratedCommand::~DecoratedCommand()
 {
-   delete mCommand;
 }
 
 wxString DecoratedCommand::GetName()
@@ -80,7 +79,8 @@ bool ApplyAndSendResponse::Apply(CommandExecutionContext context)
    if (result)
    {
       response += wxT("OK");
-   } else
+   }
+   else
    {
       response += wxT("Failed!");
    }
@@ -89,23 +89,23 @@ bool ApplyAndSendResponse::Apply(CommandExecutionContext context)
 }
 
 CommandImplementation::CommandImplementation(CommandType &type,
-      CommandOutputTarget *output)
+      std::unique_ptr<CommandOutputTarget> &&output)
 : mType(type),
    mParams(type.GetSignature().GetDefaults()),
-   mOutput(output)
+   mOutput(std::move(output))
 {
-   wxASSERT(output != NULL);
+   wxASSERT(mOutput);
 }
 
 CommandImplementation::~CommandImplementation()
 {
-   delete mOutput;
 }
 
 void CommandImplementation::TypeCheck(const wxString &typeName,
                                       const wxString &paramName,
                                       const wxVariant &param)
 {
+   // this macro is empty if wxWidgets is not compiled in debug mode
    wxASSERT_MSG(param.IsType(typeName),
                 GetName()
                 + wxT("command tried to get '")
@@ -117,6 +117,7 @@ void CommandImplementation::TypeCheck(const wxString &typeName,
 
 void CommandImplementation::CheckParam(const wxString &paramName)
 {
+   // this macro is empty if wxWidgets is not compiled in debug mode
    wxASSERT_MSG(mParams.find(paramName) != mParams.end(),
                 GetName()
                 + wxT("command tried to get '")
@@ -162,12 +163,12 @@ void CommandImplementation::Progress(double completed)
    mOutput->Progress(completed);
 }
 
-void CommandImplementation::Status(wxString status)
+void CommandImplementation::Status(const wxString &status)
 {
    mOutput->Status(status);
 }
 
-void CommandImplementation::Error(wxString message)
+void CommandImplementation::Error(const wxString &message)
 {
    mOutput->Error(message);
 }

@@ -18,7 +18,7 @@
 #define FADEIN_PLUGIN_SYMBOL XO("Fade In")
 #define FADEOUT_PLUGIN_SYMBOL XO("Fade Out")
 
-class EffectFade : public Effect
+class EffectFade final : public Effect
 {
 public:
    EffectFade(bool fadeIn = false);
@@ -26,20 +26,20 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual bool IsInteractive();
+   EffectType GetType() override;
+   bool IsInteractive() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
+   unsigned GetAudioInCount() override;
+   unsigned GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   size_t ProcessBlock(float **inBlock, float **outBlock, size_t blockLen) override;
 
 private:
    // EffectFadeIn implementation

@@ -110,13 +110,6 @@ void MousePrefs::CreateList()
    AddItem(_("Left-Drag"),         _("Select"),   _("Set Selection Range"));
    AddItem(_("Shift-Left-Click"),  _("Select"),   _("Extend Selection Range"));
    AddItem(_("Left-Double-Click"), _("Select"),   _("Select Clip or Entire Track"));
-#ifdef EXPERIMENTAL_SCRUBBING_BASIC
-   AddItem(CTRL + _("-Left-Click"), _("Select"),  _("Scrub"));
-   AddItem(CTRL + _("-Left-Drag"),  _("Select"),  _("Seek"));
-#endif
-#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
-   AddItem(CTRL + _("-Left-Double-Click"), _("Select"), _("Scroll-scrub"));
-#endif
 #ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
    AddItem(_("Wheel-Rotate"),      _("Select"),   _("Change scrub speed"));
 #endif
@@ -161,9 +154,10 @@ void MousePrefs::CreateList()
    // AddItem(_("ESC"),              _("Select"),    _("Toggle center snapping in spectrogram"), _("same as select tool"));
 #endif
 
-   AddItem(_("Wheel-Rotate"),      _("Any"),      _("Scroll up or down"));
-   AddItem(_("Shift-Wheel-Rotate"),_("Any"),      _("Scroll left or right"));
-   AddItem(CTRL + _("-Wheel-Rotate"), _("Any"),      _("Zoom in or out on Mouse Pointer"));
+   AddItem(_("Wheel-Rotate"),                _("Any"),   _("Scroll tracks up or down"));
+   AddItem(_("Shift-Wheel-Rotate"),          _("Any"),   _("Scroll waveform"));
+   AddItem(CTRL + _("-Wheel-Rotate"),        _("Any"),   _("Zoom waveform in or out"));
+   AddItem(CTRL + _("-Shift-Wheel-Rotate"),  _("Any"),   _("Waveform (dB) range"));
 
    mList->SetColumnWidth(BlankColumn, 0);
    mList->SetColumnWidth(ToolColumn, wxLIST_AUTOSIZE);
@@ -205,5 +199,6 @@ bool MousePrefs::Apply()
 
 PrefsPanel *MousePrefsFactory::Create(wxWindow *parent)
 {
-   return new MousePrefs(parent);
+   wxASSERT(parent); // to justify safenew
+   return safenew MousePrefs(parent);
 }

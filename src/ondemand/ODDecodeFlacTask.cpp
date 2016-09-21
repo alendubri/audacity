@@ -7,6 +7,7 @@
  *
  */
 
+#include "../Audacity.h"
 #include "ODDecodeFlacTask.h"
 
 #include "../Prefs.h"
@@ -32,13 +33,14 @@ ODDecodeFlacTask::~ODDecodeFlacTask()
 }
 
 
-ODTask* ODDecodeFlacTask::Clone()
+movable_ptr<ODTask> ODDecodeFlacTask::Clone() const
 {
-   ODDecodeFlacTask* clone = new ODDecodeFlacTask;
-   clone->mDemandSample=GetDemandSample();
+   auto clone = make_movable<ODDecodeFlacTask>();
+   clone->mDemandSample = GetDemandSample();
 
    //the decoders and blockfiles should not be copied.  They are created as the task runs.
-   return clone;
+   // This std::move is needed to "upcast" the pointer type
+   return std::move(clone);
 }
 
 
@@ -78,6 +80,9 @@ void ODFLACFile::metadata_callback(const FLAC__StreamMetadata *metadata)
       case FLAC__METADATA_TYPE_CUESHEET:	// convert this to labels?
       case FLAC__METADATA_TYPE_PICTURE:		// ignore pictures
       case FLAC__METADATA_TYPE_UNDEFINED:	// do nothing with this either
+
+      case FLAC__MAX_METADATA_TYPE: // quiet compiler warning with this line
+
       break;
    }
 }
@@ -166,7 +171,7 @@ FLAC__StreamDecoderWriteStatus ODFLACFile::write_callback(const FLAC__Frame *fra
    ///this->ReadData(sampleData, floatSample, 0, mLen);
    ///This class should call ReadHeader() first, so it knows the length, and can prepare
    ///the file object if it needs to.
-int ODFlacDecoder::Decode(samplePtr & data, sampleFormat & format, sampleCount start, sampleCount len, unsigned int channel)
+int ODFlacDecoder::Decode(SampleBuffer & data, sampleFormat & format, sampleCount start, size_t len, unsigned int channel)
 {
 
    //we need to lock this so the target stays fixed over the seek/write callback.
@@ -182,13 +187,17 @@ int ODFlacDecoder::Decode(samplePtr & data, sampleFormat & format, sampleCount s
    mDecodeBufferWritePosition=0;
    mDecodeBufferLen = len;
 
-   data = NewSamples(len, mFormat);
-   mDecodeBuffer=data;
+   data.Allocate(len, mFormat);
+   mDecodeBuffer = data.ptr();
    format = mFormat;
 
    mTargetChannel=channel;
 
-   if(!mFile->seek_absolute(start))
+   // Third party library has its own type alias, check it
+   static_assert(sizeof(sampleCount::type) <=
+                 sizeof(FLAC__int64),
+                 "Type FLAC__int64 is too narrow to hold a sampleCount");
+   if(!mFile->seek_absolute(static_cast<FLAC__int64>( start.as_long_long() )))
    {
       mFlacFileLock.Unlock();
       return -1;
@@ -219,9 +228,7 @@ bool ODFlacDecoder::ReadHeader()
                          //we want to use the native flac type for quick conversion.
       /* (sampleFormat)
       gPrefs->Read(wxT("/SamplingRate/DefaultProjectSampleFormat"), floatSample);*/
-   if(mFile)
-      delete mFile;
-   mFile = new ODFLACFile(this);
+   mFile = std::make_unique<ODFLACFile>(this);
 
 
    if (!mHandle.Open(mFName, wxT("rb"))) {
@@ -260,15 +267,12 @@ bool ODFlacDecoder::ReadHeader()
 
 ODFLACFile* ODFlacDecoder::GetFlacFile()
 {
-   return mFile;
+   return mFile.get();
 }
 
 ODFlacDecoder::~ODFlacDecoder(){
    if(mFile)
-   {
       mFile->finish();
-      delete mFile;
-   }
 }
 
 ///Creates an ODFileDecoder that decodes a file of filetype the subclass handles.
@@ -302,20 +306,19 @@ ODFileDecoder* ODDecodeFlacTask::CreateFileDecoder(const wxString & fileName)
    }
 
    // Open the file for import
-   ODFlacDecoder *decoder = new ODFlacDecoder(fileName);
+   auto decoder = std::make_movable<ODFlacDecoder>(fileName);
 */
 /*
    bool success = decoder->Init();
    if (!success) {
-      delete decoder;
       return NULL;
    }
 */
    // Open the file for import
-   ODFlacDecoder *decoder = new ODFlacDecoder(fileName);
+   auto decoder = make_movable<ODFlacDecoder>(fileName);
 
-   mDecoders.push_back(decoder);
-   return decoder;
+   mDecoders.push_back(std::move(decoder));
+   return mDecoders.back().get();
 
 }
 

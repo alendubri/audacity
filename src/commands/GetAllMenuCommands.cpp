@@ -24,13 +24,13 @@ wxString GetAllMenuCommandsType::BuildName()
 
 void GetAllMenuCommandsType::BuildSignature(CommandSignature &signature)
 {
-   BoolValidator *showStatusValidator = new BoolValidator();
-   signature.AddParameter(wxT("ShowStatus"), 0, showStatusValidator);
+   auto showStatusValidator = make_movable<BoolValidator>();
+   signature.AddParameter(wxT("ShowStatus"), 0, std::move(showStatusValidator));
 }
 
-Command *GetAllMenuCommandsType::Create(CommandOutputTarget *target)
+CommandHolder GetAllMenuCommandsType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new GetAllMenuCommands(*this, target);
+   return std::make_shared<GetAllMenuCommands>(*this, std::move(target));
 }
 
 bool GetAllMenuCommands::Apply(CommandExecutionContext context)

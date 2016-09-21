@@ -46,7 +46,7 @@ public:
 
 WX_DECLARE_OBJARRAY(EffectPhaserState, EffectPhaserStateArray);
 
-class EffectPhaser : public Effect
+class EffectPhaser final : public Effect
 {
 public:
    EffectPhaser();
@@ -54,29 +54,29 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual bool SupportsRealtime();
+   EffectType GetType() override;
+   bool SupportsRealtime() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool RealtimeInitialize();
-   virtual bool RealtimeAddProcessor(int numChannels, float sampleRate);
-   virtual bool RealtimeFinalize();
-   virtual sampleCount RealtimeProcess(int group,
+   unsigned GetAudioInCount() override;
+   unsigned GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   size_t ProcessBlock(float **inBlock, float **outBlock, size_t blockLen) override;
+   bool RealtimeInitialize() override;
+   bool RealtimeAddProcessor(unsigned numChannels, float sampleRate) override;
+   bool RealtimeFinalize() override;
+   size_t RealtimeProcess(int group,
                                        float **inbuf,
                                        float **outbuf,
-                                       sampleCount numSamples);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+                                       size_t numSamples) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
@@ -88,7 +88,7 @@ private:
    // EffectPhaser implementation
 
    void InstanceInit(EffectPhaserState & data, float sampleRate);
-   sampleCount InstanceProcess(EffectPhaserState & data, float **inBlock, float **outBlock, sampleCount blockLen);
+   size_t InstanceProcess(EffectPhaserState & data, float **inBlock, float **outBlock, size_t blockLen);
 
    void OnStagesSlider(wxCommandEvent & evt);
    void OnDryWetSlider(wxCommandEvent & evt);
@@ -146,7 +146,7 @@ private:
    wxSlider *mFeedbackS;
    wxSlider *mOutGainS;
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

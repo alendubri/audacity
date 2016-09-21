@@ -28,10 +28,10 @@ wxString GetTrackInfoCommandType::BuildName()
 
 void GetTrackInfoCommandType::BuildSignature(CommandSignature &signature)
 {
-   IntValidator *trackIndexValidator = new IntValidator();
-   signature.AddParameter(wxT("TrackIndex"), 0, trackIndexValidator);
+   auto trackIndexValidator = make_movable<IntValidator>();
+   signature.AddParameter(wxT("TrackIndex"), 0, std::move(trackIndexValidator));
 
-   OptionValidator *infoTypeValidator = new OptionValidator();
+   auto infoTypeValidator = make_movable<OptionValidator>();
    infoTypeValidator->AddOption(wxT("Name"));
    infoTypeValidator->AddOption(wxT("StartTime"));
    infoTypeValidator->AddOption(wxT("EndTime"));
@@ -43,12 +43,12 @@ void GetTrackInfoCommandType::BuildSignature(CommandSignature &signature)
    infoTypeValidator->AddOption(wxT("Mute"));
    infoTypeValidator->AddOption(wxT("Focused"));
 
-   signature.AddParameter(wxT("Type"), wxT("Name"), infoTypeValidator);
+   signature.AddParameter(wxT("Type"), wxT("Name"), std::move(infoTypeValidator));
 }
 
-Command *GetTrackInfoCommandType::Create(CommandOutputTarget *target)
+CommandHolder GetTrackInfoCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new GetTrackInfoCommand(*this, target);
+   return std::make_shared<GetTrackInfoCommand>(*this, std::move(target));
 }
 
 

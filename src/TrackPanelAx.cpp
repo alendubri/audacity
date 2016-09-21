@@ -74,7 +74,7 @@ void TrackPanelAx::SetFocus( Track *track )
 
    if( track == NULL )
    {
-      TrackListIterator iter( mTrackPanel->mTracks );
+      TrackListIterator iter( mTrackPanel->GetTracks() );
       track = iter.First();
    }
 
@@ -122,7 +122,7 @@ bool TrackPanelAx::IsFocused( Track *track )
 
 int TrackPanelAx::TrackNum( Track *target )
 {
-   TrackListIterator iter( mTrackPanel->mTracks );
+   TrackListIterator iter( mTrackPanel->GetTracks() );
    Track *t = iter.First();
    int ndx = 0;
 
@@ -142,7 +142,7 @@ int TrackPanelAx::TrackNum( Track *target )
 
 Track *TrackPanelAx::FindTrack( int num )
 {
-   TrackListIterator iter( mTrackPanel->mTracks );
+   TrackListIterator iter( mTrackPanel->GetTracks() );
    Track *t = iter.First();
    int ndx = 0;
 
@@ -195,7 +195,7 @@ wxAccStatus TrackPanelAx::GetChild( int childId, wxAccessible** child )
 // Gets the number of children.
 wxAccStatus TrackPanelAx::GetChildCount( int* childCount )
 {
-   TrackListIterator iter( mTrackPanel->mTracks );
+   TrackListIterator iter( mTrackPanel->GetTracks() );
    Track *t = iter.First();
    int cnt = 0;
 
@@ -284,7 +284,7 @@ wxAccStatus TrackPanelAx::GetLocation( wxRect& rect, int elementId )
 // Gets the name of the specified object.
 wxAccStatus TrackPanelAx::GetName( int childId, wxString* name )
 {
-#if defined(__WXMSW__)
+#if defined(__WXMSW__) || defined(__WXMAC__)
    if( childId == wxACC_SELF )
    {
       *name = _( "TrackView" );
@@ -333,7 +333,7 @@ wxAccStatus TrackPanelAx::GetName( int childId, wxString* name )
             // Many of translations of the strings with a leading space omitted
             // the leading space. Therefore a space has been added using wxT(" ").
             // Because screen readers won't be affected by multiple spaces, the
-            // leading spaces have not been removed, so that no new translations are needed.
+            // leading spaces have not been removed, so that no NEW translations are needed.
             /* i18n-hint: This is for screen reader software and indicates that
                on this track mute is on.*/
             name->Append( wxT(" ") + wxString(_( " Mute On" )) );

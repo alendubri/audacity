@@ -121,12 +121,12 @@ bool EffectWahwah::SupportsRealtime()
 
 // EffectClientInterface implementation
 
-int EffectWahwah::GetAudioInCount()
+unsigned EffectWahwah::GetAudioInCount()
 {
    return 1;
 }
 
-int EffectWahwah::GetAudioOutCount()
+unsigned EffectWahwah::GetAudioOutCount()
 {
    return 1;
 }
@@ -143,7 +143,7 @@ bool EffectWahwah::ProcessInitialize(sampleCount WXUNUSED(totalLen), ChannelName
    return true;
 }
 
-sampleCount EffectWahwah::ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen)
+size_t EffectWahwah::ProcessBlock(float **inBlock, float **outBlock, size_t blockLen)
 {
    return InstanceProcess(mMaster, inBlock, outBlock, blockLen);
 }
@@ -157,7 +157,7 @@ bool EffectWahwah::RealtimeInitialize()
    return true;
 }
 
-bool EffectWahwah::RealtimeAddProcessor(int WXUNUSED(numChannels), float sampleRate)
+bool EffectWahwah::RealtimeAddProcessor(unsigned WXUNUSED(numChannels), float sampleRate)
 {
    EffectWahwahState slave;
 
@@ -175,10 +175,10 @@ bool EffectWahwah::RealtimeFinalize()
    return true;
 }
 
-sampleCount EffectWahwah::RealtimeProcess(int group,
+size_t EffectWahwah::RealtimeProcess(int group,
                                           float **inbuf,
                                           float **outbuf,
-                                          sampleCount numSamples)
+                                          size_t numSamples)
 {
 
    return InstanceProcess(mSlaves[group], inbuf, outbuf, numSamples);
@@ -341,7 +341,7 @@ void EffectWahwah::InstanceInit(EffectWahwahState & data, float sampleRate)
    data.outgain = DB_TO_LINEAR(mOutGain);
 }
 
-sampleCount EffectWahwah::InstanceProcess(EffectWahwahState & data, float **inBlock, float **outBlock, sampleCount blockLen)
+size_t EffectWahwah::InstanceProcess(EffectWahwahState & data, float **inBlock, float **outBlock, size_t blockLen)
 {
    float *ibuf = inBlock[0];
    float *obuf = outBlock[0];
@@ -355,7 +355,7 @@ sampleCount EffectWahwah::InstanceProcess(EffectWahwahState & data, float **inBl
    data.phase = mPhase * M_PI / 180.0;
    data.outgain = DB_TO_LINEAR(mOutGain);
 
-   for (int i = 0; i < blockLen; i++)
+   for (decltype(blockLen) i = 0; i < blockLen; i++)
    {
       in = (double) ibuf[i];
 

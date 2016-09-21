@@ -22,12 +22,12 @@
 
 class ShuttleGui;
 
-class LibraryPrefs :public PrefsPanel
+class LibraryPrefs final : public PrefsPanel
 {
  public:
    LibraryPrefs(wxWindow * parent);
    ~LibraryPrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
  private:
    void Populate();
@@ -43,12 +43,12 @@ class LibraryPrefs :public PrefsPanel
    wxStaticText *mMP3Version;
    wxStaticText *mFFmpegVersion;
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 };
 
-class LibraryPrefsFactory : public PrefsPanelFactory
+class LibraryPrefsFactory final : public PrefsPanelFactory
 {
 public:
-   virtual PrefsPanel *Create(wxWindow *parent);
+   PrefsPanel *Create(wxWindow *parent) override;
 };
 #endif

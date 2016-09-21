@@ -36,6 +36,7 @@ undo memory so as to free up space.
 #include "UndoManager.h"
 #include "Project.h"
 #include "ShuttleGui.h"
+#include "Track.h"
 
 enum {
    ID_AVAIL = 1000,
@@ -44,7 +45,7 @@ enum {
    ID_DISCARD
 };
 
-BEGIN_EVENT_TABLE(HistoryWindow, wxDialog)
+BEGIN_EVENT_TABLE(HistoryWindow, wxDialogWrapper)
    EVT_SIZE(HistoryWindow::OnSize)
    EVT_CLOSE(HistoryWindow::OnCloseWindow)
    EVT_LIST_ITEM_SELECTED(wxID_ANY, HistoryWindow::OnItemSelected)
@@ -52,7 +53,7 @@ BEGIN_EVENT_TABLE(HistoryWindow, wxDialog)
 END_EVENT_TABLE()
 
 HistoryWindow::HistoryWindow(AudacityProject *parent, UndoManager *manager):
-   wxDialog((wxWindow*)parent, wxID_ANY, wxString(_("Undo History")),
+   wxDialogWrapper((wxWindow*)parent, wxID_ANY, wxString(_("Undo History")),
       wxDefaultPosition, wxDefaultSize,
       wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER )
 {
@@ -63,7 +64,7 @@ HistoryWindow::HistoryWindow(AudacityProject *parent, UndoManager *manager):
    mSelected = 0;
    mAudioIOBusy = false;
 
-   wxImageList *imageList = new wxImageList(9, 16);
+   auto imageList = std::make_unique<wxImageList>(9, 16);
    imageList->Add(wxIcon(empty9x16_xpm));
    imageList->Add(wxIcon(arrow_xpm));
 
@@ -84,7 +85,8 @@ HistoryWindow::HistoryWindow(AudacityProject *parent, UndoManager *manager):
          mList->InsertColumn(1, _("Size"), wxLIST_FORMAT_LEFT, 85);
 
          //Assign rather than set the image list, so that it is deleted later.
-         mList->AssignImageList(imageList, wxIMAGE_LIST_SMALL);
+         // AssignImageList takes ownership
+         mList->AssignImageList(imageList.release(), wxIMAGE_LIST_SMALL);
 
          S.StartMultiColumn(3, wxCENTRE);
          {
@@ -98,7 +100,7 @@ HistoryWindow::HistoryWindow(AudacityProject *parent, UndoManager *manager):
             S.AddVariableText(wxT(""))->Hide();
 
             S.AddPrompt(_("&Levels To Discard"));
-            mLevels = new wxSpinCtrl(this,
+            mLevels = safenew wxSpinCtrl(this,
                                      ID_LEVELS,
                                      wxT("1"),
                                      wxDefaultPosition,

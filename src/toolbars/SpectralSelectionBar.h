@@ -27,7 +27,7 @@ class wxSizeEvent;
 class SpectralSelectionBarListener;
 class NumericTextCtrl;
 
-class SpectralSelectionBar :public ToolBar {
+class SpectralSelectionBar final : public ToolBar {
 
 public:
 
@@ -36,15 +36,17 @@ public:
 
    void Create(wxWindow *parent);
 
-   virtual void Populate();
-   virtual void Repaint(wxDC * WXUNUSED(dc)) {};
-   virtual void EnableDisableButtons() {};
-   virtual void UpdatePrefs();
+   void Populate() override;
+   void Repaint(wxDC * WXUNUSED(dc)) override {};
+   void EnableDisableButtons() override {};
+   void UpdatePrefs() override;
 
    void SetFrequencies(double bottom, double top);
    void SetFrequencySelectionFormatName(const wxString & formatName);
    void SetBandwidthSelectionFormatName(const wxString & formatName);
    void SetListener(SpectralSelectionBarListener *l);
+
+   void RegenerateTooltips() override {};
 
 private:
 
@@ -74,8 +76,8 @@ private:
 
 public:
 
-   DECLARE_CLASS(SpectralSelectionBar);
-   DECLARE_EVENT_TABLE();
+   DECLARE_CLASS(SpectralSelectionBar)
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

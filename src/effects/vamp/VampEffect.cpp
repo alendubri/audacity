@@ -43,6 +43,10 @@
 #include "../../LabelTrack.h"
 #include "../../WaveTrack.h"
 
+#ifdef __AUDACITY_OLD_STD__
+#include <list>
+#endif
+
 enum
 {
    ID_Program  =  10000,
@@ -65,11 +69,11 @@ BEGIN_EVENT_TABLE(VampEffect, wxEvtHandler)
     EVT_CHOICE(wxID_ANY, VampEffect::OnChoice)
 END_EVENT_TABLE()
 
-VampEffect::VampEffect(Vamp::Plugin *plugin,
+VampEffect::VampEffect(std::unique_ptr<Vamp::Plugin> &&plugin,
                        const wxString & path,
                        int output,
                        bool hasParameters)
-:  mPlugin(plugin),
+:  mPlugin(std::move(plugin)),
    mPath(path),
    mOutput(output),
    mHasParameters(hasParameters),
@@ -88,11 +92,6 @@ VampEffect::VampEffect(Vamp::Plugin *plugin,
 
 VampEffect::~VampEffect()
 {
-   if (mPlugin)
-   {
-      delete mPlugin;
-   }
-
    if (mValues)
    {
       delete [] mValues;
@@ -185,7 +184,7 @@ bool VampEffect::IsDefault()
 
 // EffectClientInterface implementation
 
-int VampEffect::GetAudioInCount()
+unsigned VampEffect::GetAudioInCount()
 {
    return mPlugin->getMaxChannelCount();
 }
@@ -330,7 +329,7 @@ bool VampEffect::SetAutomationParameters(EffectAutomationParameters & parms)
 
             if (qs != 0.0)
             {
-               val = int((val - lower) / qs + 0.5) * qs + lower;
+               val = (int)((val - lower) / qs + 0.5) * qs + lower;
             }
          }
 
@@ -377,14 +376,7 @@ bool VampEffect::Init()
    // The plugin must be reloaded to allow changing parameters
 
    Vamp::HostExt::PluginLoader *loader = Vamp::HostExt::PluginLoader::getInstance();
-
-   if (mPlugin)
-   {
-      delete mPlugin;
-      mPlugin = NULL;
-   }
-
-   mPlugin = loader->loadPlugin(mKey, mRate, Vamp::HostExt::PluginLoader::ADAPT_ALL);
+   mPlugin.reset(loader->loadPlugin(mKey, mRate, Vamp::HostExt::PluginLoader::ADAPT_ALL));
    if (!mPlugin)
    {
       wxMessageBox(_("Sorry, failed to load Vamp Plug-in."));
@@ -408,16 +400,18 @@ bool VampEffect::Process()
    WaveTrack *left = (WaveTrack *)iter.First();
 
    bool multiple = false;
-   int prevTrackChannels = 0;
+   unsigned prevTrackChannels = 0;
 
    if (GetNumWaveGroups() > 1)
    {
       // if there is another track beyond this one and any linked one,
       // then we're processing more than one track.  That means we
-      // should use the originating track name in each new label
+      // should use the originating track name in each NEW label
       // track's name, to make clear which is which
       multiple = true;
    }
+
+   std::vector<std::shared_ptr<Effect::AddedAnalysisTrack>> addedTracks;
 
    while (left)
    {
@@ -426,7 +420,7 @@ bool VampEffect::Process()
       GetSamples(left, &lstart, &len);
 
       WaveTrack *right = NULL;
-      int channels = 1;
+      unsigned channels = 1;
 
       if (left->GetLinked())
       {
@@ -484,20 +478,13 @@ bool VampEffect::Process()
          }
       }
 
-      LabelTrack *ltrack = mFactory->NewLabelTrack();
-
-      if (!multiple)
-      {
-         ltrack->SetName(GetName());
-      }
-      else
-      {
-         ltrack->SetName(wxString::Format(wxT("%s: %s"),
-                                          left->GetName().c_str(),
-                                          GetName().c_str()));
-      }
-
-      mTracks->Add(ltrack);
+      addedTracks.push_back(AddAnalysisTrack(
+         multiple
+         ? wxString::Format(wxT("%s: %s"),
+            left->GetName().c_str(), GetName().c_str())
+         : GetName()
+      ));
+      LabelTrack *ltrack = addedTracks.back()->get();
 
       float **data = new float *[channels]; // ANSWER-ME: Vigilant Sentry marks this as memory leak, var "data" not deleted.
       for (int c = 0; c < channels; ++c)
@@ -505,14 +492,13 @@ bool VampEffect::Process()
          data[c] = new float[block];
       }
 
-      sampleCount originalLen = len;
-      sampleCount ls = lstart;
-      sampleCount rs = rstart;
+      auto originalLen = len;
+      auto ls = lstart;
+      auto rs = rstart;
 
-      while (len)
+      while (len != 0)
       {
-         int request = block;
-         if (request > len) request = len;
+         const auto request = limitSampleBufferSize( block, len );
 
          if (left)
          {
@@ -524,18 +510,23 @@ bool VampEffect::Process()
             right->Get((samplePtr)data[1], floatSample, rs, request);
          }
 
-         if (request < (int)block)
+         if (request < block)
          {
             for (int c = 0; c < channels; ++c)
             {
-               for (int i = request; i < (int)block; ++i)
+               for (decltype(block) i = request; i < block; ++i)
                {
                   data[c][i] = 0.f;
                }
             }
          }
 
-         Vamp::RealTime timestamp = Vamp::RealTime::frame2RealTime(ls, (int)(mRate + 0.5));
+         // UNSAFE_SAMPLE_COUNT_TRUNCATION
+         // Truncation in case of very long tracks!
+         Vamp::RealTime timestamp = Vamp::RealTime::frame2RealTime(
+            long( ls.as_long_long() ),
+            (int)(mRate + 0.5)
+         );
 
          Vamp::Plugin::FeatureSet features = mPlugin->process(data, timestamp);
          AddFeatures(ltrack, features);
@@ -554,14 +545,18 @@ bool VampEffect::Process()
 
          if (channels > 1)
          {
-            if (TrackGroupProgress(count, (ls - lstart) / double(originalLen)))
+            if (TrackGroupProgress(count,
+                  (ls - lstart).as_double() /
+                  originalLen.as_double() ))
             {
                return false;
             }
          }
          else
          {
-            if (TrackProgress(count, (ls - lstart) / double(originalLen)))
+            if (TrackProgress(count,
+                  (ls - lstart).as_double() /
+                  originalLen.as_double() ))
             {
                return false;
             }
@@ -576,13 +571,16 @@ bool VampEffect::Process()
       left = (WaveTrack *)iter.Next();
    }
 
+   // All completed without cancellation, so commit the addition of tracks now
+   for (auto &addedTrack : addedTracks)
+      addedTrack->Commit();
+
    return true;
 }
 
 void VampEffect::End()
 {
-   delete mPlugin;
-   mPlugin = 0;
+   mPlugin.reset();
 }
 
 void VampEffect::PopulateOrExchange(ShuttleGui & S)
@@ -846,7 +844,7 @@ void VampEffect::UpdateFromPlugin()
 
             if (qs != 0.0)
             {
-               value = int((value - lower) / qs + 0.5) * qs + lower;
+               value = (int)((value - lower) / qs + 0.5) * qs + lower;
             }
          }
 
@@ -893,7 +891,7 @@ void VampEffect::OnSlider(wxCommandEvent & evt)
 
       if (qs != 0.0)
       {
-         val = int(val / qs + 0.5) * qs;
+         val = (int)(val / qs + 0.5) * qs;
       }
    }
 
@@ -922,7 +920,7 @@ void VampEffect::OnTextCtrl(wxCommandEvent & evt)
 
       if (qs != 0.0)
       {
-         val = int((val - lower) / qs + 0.5) * qs + lower;
+         val = (int)((val - lower) / qs + 0.5) * qs + lower;
       }
    }
 

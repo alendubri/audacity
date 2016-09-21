@@ -20,6 +20,7 @@
 
 #include "Effect.h"
 
+#include "../MemoryX.h"
 #include <wx/dialog.h>
 #include <wx/slider.h>
 
@@ -30,9 +31,14 @@ class wxString;
 class Envelope;
 class WaveTrack;
 
+class wxRadioButton;
+class wxTextCtrl;
+
 #include "../RealFFTf.h"
 
-class EffectNoiseRemoval : public Effect
+#define NOISEREMOVAL_PLUGIN_SYMBOL XO("Noise Removal")
+
+class EffectNoiseRemoval final : public Effect
 {
 public:
    EffectNoiseRemoval();
@@ -40,20 +46,20 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual bool SupportsAutomation();
+   EffectType GetType() override;
+   bool SupportsAutomation() override;
 
    // Effect implementation
 
-   virtual bool PromptUser();
-   virtual bool Init();
-   virtual bool CheckWhetherSkipEffect();
-   virtual bool Process();
+   bool PromptUser(wxWindow *parent) override;
+   bool Init() override;
+   bool CheckWhetherSkipEffect() override;
+   bool Process() override;
 
 private:
 
@@ -63,7 +69,7 @@ private:
 
    // Parameters chosen before the first phase
    double    mSampleRate;
-   int       mWindowSize;
+   size_t    mWindowSize;
    int       mSpectrumSize;
    float     mMinSignalTime;    // in secs
 
@@ -84,7 +90,7 @@ private:
 
    void Initialize();
    void StartNewTrack();
-   void ProcessSamples(sampleCount len, float *buffer);
+   void ProcessSamples(size_t len, float *buffer);
    void FillFirstHistoryWindow();
    void ApplyFreqSmoothing(float *spec);
    void GetProfile();
@@ -94,7 +100,7 @@ private:
    void Cleanup();
 
    // Variables that only exist during processing
-   WaveTrack            *mOutputTrack;
+   std::unique_ptr<WaveTrack> mOutputTrack;
    sampleCount       mInSampleCount;
    sampleCount       mOutSampleCount;
    int                   mInputPos;
@@ -128,7 +134,7 @@ private:
 
 // Declare window functions
 
-class NoiseRemovalDialog: public EffectDialog
+class NoiseRemovalDialog final : public EffectDialog
 {
 public:
    // constructors and destructors

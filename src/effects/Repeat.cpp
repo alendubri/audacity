@@ -104,7 +104,7 @@ bool EffectRepeat::Process()
    bool bGoodResult = true;
    double maxDestLen = 0.0; // used to change selection to generated bit
 
-   TrackListIterator iter(mOutputTracks);
+   TrackListIterator iter(mOutputTracks.get());
 
    for (Track *t = iter.First(); t && bGoodResult; t = iter.Next())
    {
@@ -125,9 +125,9 @@ bool EffectRepeat::Process()
       {
          WaveTrack* track = (WaveTrack*)t;
 
-         sampleCount start = track->TimeToLongSamples(mT0);
-         sampleCount end = track->TimeToLongSamples(mT1);
-         sampleCount len = (sampleCount)(end - start);
+         auto start = track->TimeToLongSamples(mT0);
+         auto end = track->TimeToLongSamples(mT1);
+         auto len = end - start;
          double tLen = track->LongSamplesToTime(len);
          double tc = mT0 + tLen;
 
@@ -136,11 +136,10 @@ bool EffectRepeat::Process()
             continue;
          }
 
-         Track *dest;
-         track->Copy(mT0, mT1, &dest);
+         auto dest = track->Copy(mT0, mT1);
          for(int j=0; j<repeatCount; j++)
          {
-            if (!track->Paste(tc, dest) ||
+            if (!track->Paste(tc, dest.get()) ||
                   TrackProgress(nTrack, j / repeatCount)) // TrackProgress returns true on Cancel.
             {
                bGoodResult = false;
@@ -150,7 +149,6 @@ bool EffectRepeat::Process()
          }
          if (tc > maxDestLen)
             maxDestLen = tc;
-         delete dest;
          nTrack++;
       }
       else if (t->IsSyncLockSelected())
@@ -161,7 +159,7 @@ bool EffectRepeat::Process()
 
    if (bGoodResult)
    {
-      // Select the new bits + original bit
+      // Select the NEW bits + original bit
       mT1 = maxDestLen;
    }
 

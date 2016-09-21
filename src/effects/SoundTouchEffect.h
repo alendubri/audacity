@@ -34,13 +34,13 @@ using namespace soundtouch;
 
 class WaveTrack;
 
-class EffectSoundTouch : public Effect
+class EffectSoundTouch /* not final */ : public Effect
 {
 public:
 
    // Effect implementation
 
-   virtual bool Process();
+   bool Process() override;
 
    // EffectSoundTouch implementation
 
@@ -50,14 +50,14 @@ public:
 #endif
 
 protected:
-   SoundTouch *mSoundTouch;
+   std::unique_ptr<SoundTouch> mSoundTouch;
    double mCurT0;
    double mCurT1;
 
 private:
-   bool ProcessLabelTrack(Track *track);
+   bool ProcessLabelTrack(LabelTrack *track);
 #ifdef USE_MIDI
-   bool ProcessNoteTrack(Track *track);
+   bool ProcessNoteTrack(NoteTrack *track);
 #endif
    bool ProcessOne(WaveTrack * t, sampleCount start, sampleCount end);
    bool ProcessStereo(WaveTrack* leftTrack, WaveTrack* rightTrack,

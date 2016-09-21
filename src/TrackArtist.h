@@ -18,6 +18,7 @@
 #ifndef __AUDACITY_TRACKARTIST__
 #define __AUDACITY_TRACKARTIST__
 
+#include "MemoryX.h"
 #include <wx/brush.h>
 #include <wx/pen.h>
 #include "Experimental.h"
@@ -63,9 +64,9 @@ class AUDACITY_DLL_API TrackArtist {
                   bool drawEnvelope, bool bigPoints, bool drawSliders,
                   bool hasSolo);
 
-   void DrawVRuler(Track *t, wxDC *dc, wxRect & rect);
+   void DrawVRuler(const Track *t, wxDC *dc, wxRect & rect);
 
-   void UpdateVRuler(Track *t, wxRect & rect);
+   void UpdateVRuler(const Track *t, wxRect & rect);
 
    void SetInset(int left, int top, int right, int bottom);
 
@@ -84,7 +85,7 @@ class AUDACITY_DLL_API TrackArtist {
 
    // Helper: draws background with selection rect
    static void DrawBackgroundWithSelection(wxDC *dc, const wxRect &rect,
-         Track *track, wxBrush &selBrush, wxBrush &unselBrush,
+         const Track *track, wxBrush &selBrush, wxBrush &unselBrush,
          const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo);
 
  private:
@@ -93,46 +94,46 @@ class AUDACITY_DLL_API TrackArtist {
    // Lower-level drawing functions
    //
 
-   void DrawWaveform(WaveTrack *track,
+   void DrawWaveform(const WaveTrack *track,
                      wxDC & dc, const wxRect & rect,
                      const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo,
                      bool drawEnvelope, bool bigPoints, bool drawSliders,
                      bool muted);
 
-   void DrawSpectrum(WaveTrack *track,
+   void DrawSpectrum(const WaveTrack *track,
                      wxDC & dc, const wxRect & rect,
                      const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo);
 #ifdef USE_MIDI
    int GetBottom(NoteTrack *t, const wxRect &rect);
-   void DrawNoteBackground(NoteTrack *track, wxDC &dc,
+   void DrawNoteBackground(const NoteTrack *track, wxDC &dc,
                            const wxRect &rect, const wxRect &sel,
                            const ZoomInfo &zoomInfo,
                            const wxBrush &wb, const wxPen &wp,
                            const wxBrush &bb, const wxPen &bp,
                            const wxPen &mp);
-   void DrawNoteTrack(NoteTrack *track,
+   void DrawNoteTrack(const NoteTrack *track,
                       wxDC & dc, const wxRect & rect,
                       const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo,
                       bool muted);
 #endif // USE_MIDI
 
-   void DrawLabelTrack(LabelTrack *track,
+   void DrawLabelTrack(const LabelTrack *track,
                        wxDC & dc, const wxRect & rect,
                        const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo);
 
-   void DrawTimeTrack(TimeTrack *track,
+   void DrawTimeTrack(const TimeTrack *track,
                       wxDC & dc, const wxRect & rect, const ZoomInfo &zoomInfo);
 
    void DrawTimeSlider(wxDC & dc, const wxRect & rect,
                        bool rightwards);
 
-   void DrawClipWaveform(WaveTrack *track, WaveClip *clip,
+   void DrawClipWaveform(const WaveTrack *track, const WaveClip *clip,
                          wxDC & dc, const wxRect & rect,
                          const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo,
                          bool drawEnvelope, bool bigPoints,
                          bool dB, bool muted);
 
-   void DrawClipSpectrum(WaveTrackCache &cache, WaveClip *clip,
+   void DrawClipSpectrum(WaveTrackCache &cache, const WaveClip *clip,
                          wxDC & dc, const wxRect & rect,
                          const SelectedRegion &selectedRegion, const ZoomInfo &zoomInfo);
 
@@ -156,7 +157,7 @@ class AUDACITY_DLL_API TrackArtist {
    void DrawIndividualSamples(wxDC & dc, int leftOffset, const wxRect & rect,
                               float zoomMin, float zoomMax,
                               bool dB, float dBRange,
-                              WaveClip *clip,
+                              const WaveClip *clip,
                               const ZoomInfo &zoomInfo,
                               bool bigPoints, bool showPoints, bool muted);
 
@@ -200,7 +201,7 @@ class AUDACITY_DLL_API TrackArtist {
    wxPen muteClippedPen;
    wxPen blankSelectedPen;
 
-   Ruler *vruler;
+   std::unique_ptr<Ruler> vruler;
 
 #ifdef EXPERIMENTAL_FFT_Y_GRID
    bool fftYGridOld;

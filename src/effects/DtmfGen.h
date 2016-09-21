@@ -27,7 +27,7 @@ class ShuttleGui;
 
 #define DTMFTONES_PLUGIN_SYMBOL XO("DTMF Tones")
 
-class EffectDtmf : public Effect
+class EffectDtmf final : public Effect
 {
 public:
    EffectDtmf();
@@ -35,33 +35,33 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   unsigned GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   size_t ProcessBlock(float **inBlock, float **outBlock, size_t blockLen) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
-   virtual bool Startup();
-   virtual bool Init();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataFromWindow();
-   virtual bool TransferDataToWindow();
+   bool Startup() override;
+   bool Init() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataFromWindow() override;
+   bool TransferDataToWindow() override;
 
 private:
    // EffectDtmf implementation
 
-   bool MakeDtmfTone(float *buffer, sampleCount len, float fs,
+   bool MakeDtmfTone(float *buffer, size_t len, float fs,
                      wxChar tone, sampleCount last,
                      sampleCount total, float amplitude);
    void Recalculate();
@@ -98,7 +98,7 @@ private:
    wxStaticText *mDtmfSilenceT;
    wxStaticText *mDtmfDutyT;
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

@@ -56,12 +56,12 @@ bool EffectStereoToMono::IsInteractive()
 
 // EffectClientInterface implementation
 
-int EffectStereoToMono::GetAudioInCount()
+unsigned EffectStereoToMono::GetAudioInCount()
 {
    return 2;
 }
 
-int EffectStereoToMono::GetAudioOutCount()
+unsigned EffectStereoToMono::GetAudioOutCount()
 {
    return 1;
 }
@@ -70,18 +70,18 @@ int EffectStereoToMono::GetAudioOutCount()
 
 bool EffectStereoToMono::Process()
 {
-   // Do not use mWaveTracks here.  We will possibly delete tracks,
+   // Do not use mWaveTracks here.  We will possibly DELETE tracks,
    // so we must use the "real" tracklist.
    this->CopyInputTracks(); // Set up mOutputTracks.
    bool bGoodResult = true;
 
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    mLeftTrack = (WaveTrack *)iter.First();
    bool refreshIter = false;
 
    if(mLeftTrack)
    {
-      // create a new WaveTrack to hold all of the output
+      // create a NEW WaveTrack to hold all of the output
       AudacityProject *p = GetActiveProject();
       mOutTrack = p->GetTrackFactory()->NewWaveTrack(floatSample, mLeftTrack->GetRate());
    }
@@ -92,15 +92,16 @@ bool EffectStereoToMono::Process()
          mLeftTrack->GetSelected() &&
          mLeftTrack->GetLinked()) {
 
-         mRightTrack = (WaveTrack *)iter.Next();
+         // Assume linked track is wave
+         mRightTrack = static_cast<WaveTrack*>(iter.Next());
 
          if ((mLeftTrack->GetRate() == mRightTrack->GetRate())) {
-            sampleCount leftTrackStart = mLeftTrack->TimeToLongSamples(mLeftTrack->GetStartTime());
-            sampleCount rightTrackStart = mRightTrack->TimeToLongSamples(mRightTrack->GetStartTime());
+            auto leftTrackStart = mLeftTrack->TimeToLongSamples(mLeftTrack->GetStartTime());
+            auto rightTrackStart = mRightTrack->TimeToLongSamples(mRightTrack->GetStartTime());
             mStart = wxMin(leftTrackStart, rightTrackStart);
 
-            sampleCount leftTrackEnd = mLeftTrack->TimeToLongSamples(mLeftTrack->GetEndTime());
-            sampleCount rightTrackEnd = mRightTrack->TimeToLongSamples(mRightTrack->GetEndTime());
+            auto leftTrackEnd = mLeftTrack->TimeToLongSamples(mLeftTrack->GetEndTime());
+            auto rightTrackEnd = mRightTrack->TimeToLongSamples(mRightTrack->GetEndTime());
             mEnd = wxMax(leftTrackEnd, rightTrackEnd);
 
             bGoodResult = ProcessOne(count);
@@ -124,8 +125,7 @@ bool EffectStereoToMono::Process()
       count++;
    }
 
-   if(mOutTrack)
-      delete mOutTrack;
+   mOutTrack.reset();
    this->ReplaceProcessedTracks(bGoodResult);
    return bGoodResult;
 }
@@ -136,8 +136,8 @@ bool EffectStereoToMono::ProcessOne(int count)
    float  curRightFrame;
    float  curMonoFrame;
 
-   sampleCount idealBlockLen = mLeftTrack->GetMaxBlockSize() * 2;
-   sampleCount index = mStart;
+   auto idealBlockLen = mLeftTrack->GetMaxBlockSize() * 2;
+   auto index = mStart;
    float *leftBuffer = new float[idealBlockLen];
    float *rightBuffer = new float[idealBlockLen];
    bool bResult = true;
@@ -145,11 +145,8 @@ bool EffectStereoToMono::ProcessOne(int count)
    while (index < mEnd) {
       bResult &= mLeftTrack->Get((samplePtr)leftBuffer, floatSample, index, idealBlockLen);
       bResult &= mRightTrack->Get((samplePtr)rightBuffer, floatSample, index, idealBlockLen);
-      sampleCount limit = idealBlockLen;
-      if ((index + idealBlockLen) > mEnd) {
-         limit = mEnd - index;
-      }
-      for (sampleCount i = 0; i < limit; ++i) {
+      auto limit = limitSampleBufferSize( idealBlockLen, mEnd - index );
+      for (decltype(limit) i = 0; i < limit; ++i) {
          index++;
          curLeftFrame = leftBuffer[i];
          curRightFrame = rightBuffer[i];
@@ -157,19 +154,18 @@ bool EffectStereoToMono::ProcessOne(int count)
          leftBuffer[i] = curMonoFrame;
       }
       bResult &= mOutTrack->Append((samplePtr)leftBuffer, floatSample, limit);
-      if (TrackProgress(count, 2.*((double)index / (double)(mEnd - mStart))))
+      if (TrackProgress(count, 2.*(index.as_double() / (mEnd - mStart).as_double())))
          return false;
    }
 
    double minStart = wxMin(mLeftTrack->GetStartTime(), mRightTrack->GetStartTime());
    bResult &= mLeftTrack->Clear(mLeftTrack->GetStartTime(), mLeftTrack->GetEndTime());
    bResult &= mOutTrack->Flush();
-   bResult &= mLeftTrack->Paste(minStart, mOutTrack);
+   bResult &= mLeftTrack->Paste(minStart, mOutTrack.get());
    mLeftTrack->SetLinked(false);
    mRightTrack->SetLinked(false);
    mLeftTrack->SetChannel(Track::MonoChannel);
    mOutputTracks->Remove(mRightTrack);
-   delete mRightTrack;
 
    delete [] leftBuffer;
    delete [] rightBuffer;

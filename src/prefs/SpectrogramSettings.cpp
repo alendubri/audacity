@@ -57,10 +57,6 @@ SpectrogramSettings::Globals
 }
 
 SpectrogramSettings::SpectrogramSettings()
-   : hFFT(0)
-   , window(0)
-   , dWindow(0)
-   , tWindow(0)
 {
    LoadPrefs();
 }
@@ -68,8 +64,6 @@ SpectrogramSettings::SpectrogramSettings()
 SpectrogramSettings::SpectrogramSettings(const SpectrogramSettings &other)
    : minFreq(other.minFreq)
    , maxFreq(other.maxFreq)
-   , logMinFreq(other.logMinFreq)
-   , logMaxFreq(other.logMaxFreq)
    , range(other.range)
    , gain(other.gain)
    , frequencyGain(other.frequencyGain)
@@ -95,10 +89,10 @@ SpectrogramSettings::SpectrogramSettings(const SpectrogramSettings &other)
 #endif
 
    // Do not copy these!
-   , hFFT(0)
-   , window(0)
-   , tWindow(0)
-   , dWindow(0)
+   , hFFT{}
+   , window{}
+   , tWindow{}
+   , dWindow{}
 {
 }
 
@@ -107,8 +101,6 @@ SpectrogramSettings &SpectrogramSettings::operator= (const SpectrogramSettings &
    if (this != &other) {
       minFreq = other.minFreq;
       maxFreq = other.maxFreq;
-      logMinFreq = other.logMinFreq;
-      logMaxFreq = other.logMaxFreq;
       range = other.range;
       gain = other.gain;
       frequencyGain = other.frequencyGain;
@@ -148,9 +140,9 @@ SpectrogramSettings& SpectrogramSettings::defaults()
 //static
 const wxArrayString &SpectrogramSettings::GetScaleNames()
 {
-   class ScaleNamesArray : public TranslatableStringArray
+   class ScaleNamesArray final : public TranslatableStringArray
    {
-      virtual void Populate()
+      void Populate() override
       {
          // Keep in correspondence with enum SpectrogramSettings::ScaleType:
          mContents.Add(_("Linear"));
@@ -173,9 +165,9 @@ const wxArrayString &SpectrogramSettings::GetScaleNames()
 //static
 const wxArrayString &SpectrogramSettings::GetAlgorithmNames()
 {
-   class AlgorithmNamesArray : public TranslatableStringArray
+   class AlgorithmNamesArray final : public TranslatableStringArray
    {
-      virtual void Populate()
+      void Populate() override
       {
          // Keep in correspondence with enum SpectrogramSettings::Algorithm:
          mContents.Add(_("Frequencies"));
@@ -245,10 +237,10 @@ bool SpectrogramSettings::Validate(bool quiet)
       std::max(0, std::min(NumWindowFuncs() - 1, windowType));
    scaleType =
       ScaleType(std::max(0,
-         std::min(int(SpectrogramSettings::stNumScaleTypes) - 1,
-            int(scaleType))));
+         std::min((int)(SpectrogramSettings::stNumScaleTypes) - 1,
+            (int)(scaleType))));
    algorithm = Algorithm(
-      std::max(0, std::min(int(algNumAlgorithms) - 1, int(algorithm)))
+      std::max(0, std::min((int)(algNumAlgorithms) - 1, (int)(algorithm)))
    );
    ConvertToEnumeratedWindowSizes();
    ConvertToActualWindowSizes();
@@ -297,20 +289,6 @@ void SpectrogramSettings::LoadPrefs()
 
    // Enforce legal values
    Validate(true);
-
-   // These preferences are not written anywhere in the program as of now,
-   // but I keep this legacy here.  Who knows, someone might edit prefs files
-   // directly.  PRL
-   logMinFreq = gPrefs->Read(wxT("/SpectrumLog/MinFreq"), -1);
-   if (logMinFreq < 0)
-      logMinFreq = minFreq;
-   if (logMinFreq < 1)
-      logMinFreq = 1;
-   logMaxFreq = gPrefs->Read(wxT("/SpectrumLog/MaxFreq"), -1);
-   if (logMaxFreq < 0)
-      logMaxFreq = maxFreq;
-   logMaxFreq =
-      std::max(logMinFreq + 1, logMaxFreq);
 
    InvalidateCaches();
 }
@@ -370,7 +348,6 @@ SpectrogramSettings::~SpectrogramSettings()
 
 void SpectrogramSettings::DestroyWindows()
 {
-#ifdef EXPERIMENTAL_USE_REALFFTF
    if (hFFT != NULL) {
       EndFFT(hFFT);
       hFFT = NULL;
@@ -387,7 +364,6 @@ void SpectrogramSettings::DestroyWindows()
       delete[] tWindow;
       tWindow = NULL;
    }
-#endif
 }
 
 
@@ -395,8 +371,8 @@ namespace
 {
    enum { WINDOW, TWINDOW, DWINDOW };
    void RecreateWindow(
-      float *&window, int which, int fftLen,
-      int padding, int windowType, int windowSize, double &scale)
+      float *&window, int which, size_t fftLen,
+      size_t padding, int windowType, size_t windowSize, double &scale)
    {
       if (window != NULL)
          delete[] window;
@@ -426,7 +402,7 @@ namespace
          // Future, reassignment
       case TWINDOW:
          NewWindowFunc(windowType, windowSize, extra, window + padding);
-         for (int ii = padding, multiplier = -windowSize / 2; ii < endOfWindow; ++ii, ++multiplier)
+         for (int ii = padding, multiplier = -(int)windowSize / 2; ii < endOfWindow; ++ii, ++multiplier)
             window[ii] *= multiplier;
          break;
       case DWINDOW:
@@ -450,12 +426,11 @@ namespace
 
 void SpectrogramSettings::CacheWindows() const
 {
-#ifdef EXPERIMENTAL_USE_REALFFTF
    if (hFFT == NULL || window == NULL) {
 
       double scale;
-      const int fftLen = windowSize * zeroPaddingFactor;
-      const int padding = (windowSize * (zeroPaddingFactor - 1)) / 2;
+      const auto fftLen = WindowSize() * ZeroPaddingFactor();
+      const auto padding = (windowSize * (zeroPaddingFactor - 1)) / 2;
 
       if (hFFT != NULL)
          EndFFT(hFFT);
@@ -466,7 +441,6 @@ void SpectrogramSettings::CacheWindows() const
          RecreateWindow(dWindow, DWINDOW, fftLen, padding, windowType, windowSize, scale);
       }
    }
-#endif // EXPERIMENTAL_USE_REALFFTF
 }
 
 void SpectrogramSettings::ConvertToEnumeratedWindowSizes()
@@ -501,60 +475,7 @@ void SpectrogramSettings::ConvertToActualWindowSizes()
 #endif
 }
 
-int SpectrogramSettings::GetMinFreq(double rate) const
-{
-   const int top = lrint(rate / 2.);
-   return std::max(0, std::min(top, minFreq));
-}
-
-int SpectrogramSettings::GetMaxFreq(double rate) const
-{
-   const int top = lrint(rate / 2.);
-   if (maxFreq < 0)
-      return top;
-   else
-      return std::max(0, std::min(top, maxFreq));
-}
-
-int SpectrogramSettings::GetLogMinFreq(double rate) const
-{
-   const int top = lrint(rate / 2.);
-   if (logMinFreq < 0)
-      return top / 1000.0;
-   else
-      return std::max(1, std::min(top, logMinFreq));
-}
-
-int SpectrogramSettings::GetLogMaxFreq(double rate) const
-{
-   const int top = lrint(rate / 2.);
-   if (logMaxFreq < 0)
-      return top;
-   else
-      return std::max(1, std::min(top, logMaxFreq));
-}
-
-void SpectrogramSettings::SetMinFreq(int freq)
-{
-   minFreq = freq;
-}
-
-void SpectrogramSettings::SetMaxFreq(int freq)
-{
-   maxFreq = freq;
-}
-
-void SpectrogramSettings::SetLogMinFreq(int freq)
-{
-   logMinFreq = freq;
-}
-
-void SpectrogramSettings::SetLogMaxFreq(int freq)
-{
-   logMaxFreq = freq;
-}
-
-int SpectrogramSettings::GetFFTLength() const
+size_t SpectrogramSettings::GetFFTLength() const
 {
    return windowSize
 #ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
@@ -564,11 +485,10 @@ int SpectrogramSettings::GetFFTLength() const
 }
 
 NumberScale SpectrogramSettings::GetScale
-(double rate, bool bins) const
+(float minFreq, float maxFreq, double rate, bool bins) const
 {
-   int minFreq, maxFreq;
    NumberScaleType type = nstLinear;
-   const int half = GetFFTLength() / 2;
+   const auto half = GetFFTLength() / 2;
 
    // Don't assume the correspondence of the enums will remain direct in the future.
    // Do this switch.
@@ -585,31 +505,8 @@ NumberScale SpectrogramSettings::GetScale
       type = nstBark; break;
    case stErb:
       type = nstErb; break;
-   case stUndertone:
-      type = nstUndertone; break;
-   }
-
-   switch (scaleType) {
-   default:
-      wxASSERT(false);
-   case stLinear:
-      minFreq = GetMinFreq(rate);
-      maxFreq = GetMaxFreq(rate);
-      break;
-   case stLogarithmic:
-   case stMel:
-   case stBark:
-   case stErb:
-      minFreq = GetLogMinFreq(rate);
-      maxFreq = GetLogMaxFreq(rate);
-      break;
-   case stUndertone:
-   {
-      const float bin2 = rate / half;
-      minFreq = std::max(int(0.5 + bin2), GetLogMinFreq(rate));
-      maxFreq = GetLogMaxFreq(rate);
-   }
-   break;
+   case stPeriod:
+      type = nstPeriod; break;
    }
 
    return NumberScale(type, minFreq, maxFreq,

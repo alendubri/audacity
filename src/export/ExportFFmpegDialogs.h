@@ -20,6 +20,7 @@ LRN
 #include <wx/listimpl.cpp>
 #include "../xml/XMLFileReader.h"
 #include "../FileNames.h"
+#include "../widgets/wxPanelWrapper.h"
 
 
 /// Identifiers for pre-set export types.
@@ -40,7 +41,7 @@ struct ExposedFormat
    const wxChar *name;        //!< format name (internal, should be unique; if not - export dialog may show unusual behaviour)
    const wxChar *extension;   //!< default extension for this format. More extensions may be added later via AddExtension.
    const wxChar *shortname;   //!< used to guess the format
-   int maxchannels;           //!< how much channels this format could handle
+   unsigned maxchannels;      //!< how many channels this format could handle
    int canmetadata;           //!< !=0 if format supports metadata, -1 any avformat version, otherwise version support added
    bool canutf8;              //!< true if format supports metadata in UTF-8, false otherwise
    const wxChar *description; //!< format description (will be shown in export dialog)
@@ -58,7 +59,7 @@ struct CompatibilityEntry
 
 
 /// AC3 export options dialog
-class ExportFFmpegAC3Options : public wxPanel
+class ExportFFmpegAC3Options final : public wxPanelWrapper
 {
 public:
 
@@ -84,7 +85,7 @@ private:
    int mBitRateFromChoice;
 };
 
-class ExportFFmpegAACOptions : public wxPanel
+class ExportFFmpegAACOptions final : public wxPanelWrapper
 {
 public:
 
@@ -100,7 +101,7 @@ private:
    wxSpinCtrl *mQualitySpin;
 };
 
-class ExportFFmpegAMRNBOptions : public wxPanel
+class ExportFFmpegAMRNBOptions final : public wxPanelWrapper
 {
 public:
 
@@ -122,7 +123,7 @@ private:
    int mBitRateFromChoice;
 };
 
-class ExportFFmpegWMAOptions : public wxPanel
+class ExportFFmpegWMAOptions final : public wxPanelWrapper
 {
 public:
 
@@ -145,7 +146,7 @@ private:
    int mBitRateFromChoice;
 };
 
-class ExportFFmpegCustomOptions : public wxPanel
+class ExportFFmpegCustomOptions final : public wxPanelWrapper
 {
 public:
 
@@ -160,7 +161,7 @@ public:
 
 private:
 
-   DECLARE_EVENT_TABLE();
+   DECLARE_EVENT_TABLE()
 };
 
 /// Entry for the Applicability table
@@ -175,7 +176,7 @@ struct ApplicableFor
 class FFmpegPresets;
 
 /// Custom FFmpeg export dialog
-class ExportFFmpegOptions : public wxDialog
+class ExportFFmpegOptions final : public wxDialogWrapper
 {
 public:
 
@@ -216,7 +217,7 @@ private:
    wxArrayString mCodecLongNames;
    wxArrayString mProfileNames;
    wxArrayInt    mProfileLabels;
-   wxArrayString mPredictionOrderMethodNames;;
+   wxArrayString mPredictionOrderMethodNames;
    wxArrayInt    mPredictionOrderMethodLabels;
 
    wxChoice *mFormatChoice;
@@ -261,9 +262,9 @@ private:
    int mBitRateFromChoice;
    int mSampleRateFromChoice;
 
-   FFmpegPresets *mPresets;
+   std::unique_ptr<FFmpegPresets> mPresets;
 
-   wxArrayString *mPresetNames;
+   wxArrayString mPresetNames;
 
    /// Finds the format currently selected and returns it's name and description
    void FindSelectedFormat(wxString **name, wxString **longname);
@@ -277,7 +278,7 @@ private:
    /// Retreives a list of formats compatible to codec
    ///\param id Codec ID
    ///\param selfmt format selected at the moment
-   ///\return index of the selfmt in new format list or -1 if it is not in the list
+   ///\return index of the selfmt in NEW format list or -1 if it is not in the list
    int FetchCompatibleFormatList(AVCodecID id, wxString *selfmt);
 
    /// Retreives codec list from libavcodec
@@ -286,7 +287,7 @@ private:
    /// Retreives a list of codecs compatible to format
    ///\param fmt Format short name
    ///\param id id of the codec selected at the moment
-   ///\return index of the id in new codec list or -1 if it is not in the list
+   ///\return index of the id in NEW codec list or -1 if it is not in the list
    int FetchCompatibleCodecList(const wxChar *fmt, AVCodecID id);
 
    /// Retreives list of presets from configuration file
@@ -323,7 +324,7 @@ public:
    FFmpegPresets();
    ~FFmpegPresets();
 
-   wxArrayString *GetPresetList();
+   void GetPresetList(wxArrayString &list);
    void LoadPreset(ExportFFmpegOptions *parent, wxString &name);
    void SavePreset(ExportFFmpegOptions *parent, wxString &name);
    void DeletePreset(wxString &name);

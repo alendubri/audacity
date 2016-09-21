@@ -411,9 +411,9 @@ bool BatchCommands::IsMono()
    return mono;
 }
 
-wxString BatchCommands::BuildCleanFileName(wxString fileName, wxString extension)
+wxString BatchCommands::BuildCleanFileName(const wxString &fileName, const wxString &extension)
 {
-   wxFileName newFileName(fileName);
+   const wxFileName newFileName{ fileName };
    wxString justName = newFileName.GetName();
    wxString pathName = newFileName.GetPath(wxPATH_GET_VOLUME | wxPATH_GET_SEPARATOR);
 
@@ -460,7 +460,7 @@ wxString BatchCommands::BuildCleanFileName(wxString fileName, wxString extension
 
 bool BatchCommands::WriteMp3File( const wxString & Name, int bitrate )
 {  //check if current project is mono or stereo
-   int numChannels = 2;
+   unsigned numChannels = 2;
    if (IsMono()) {
       numChannels = 1;
    }
@@ -509,7 +509,7 @@ bool BatchCommands::ApplySpecialCommand(int WXUNUSED(iCommand), const wxString &
 
    AudacityProject *project = GetActiveProject();
 
-   int numChannels = 1;    //used to switch between mono and stereo export
+   unsigned numChannels = 1;    //used to switch between mono and stereo export
    if (IsMono()) {
       numChannels = 1;  //export in mono
    } else {
@@ -535,7 +535,7 @@ bool BatchCommands::ApplySpecialCommand(int WXUNUSED(iCommand), const wxString &
 
    // We have a command index, but we don't use it!
    // TODO: Make this special-batch-command code use the menu item code....
-   // FIXME: No error reporting on write file failure in batch mode.
+   // FIXME: TRAP_ERR No error reporting on write file failure in batch mode.
    if (command == wxT("NoAction")) {
       return true;
    } else if (!mFileName.IsEmpty() && command == wxT("Import")) {
@@ -594,8 +594,8 @@ bool BatchCommands::ApplyEffectCommand(const PluginID & ID, const wxString & com
 
    AudacityProject *project = GetActiveProject();
 
-   //FIXME: for later versions may want to not select-all in batch mode.
-   //IF nothing selected, THEN select everything
+   // FIXME: for later versions may want to not select-all in batch mode.
+   // IF nothing selected, THEN select everything
    // (most effects require that you have something selected).
    project->SelectAllIfNone();
 
@@ -608,7 +608,8 @@ bool BatchCommands::ApplyEffectCommand(const PluginID & ID, const wxString & com
    {
       // and apply the effect...
       res = project->OnEffect(ID, AudacityProject::OnEffectFlags::kConfigured |
-                                  AudacityProject::OnEffectFlags::kSkipState);
+                                  AudacityProject::OnEffectFlags::kSkipState |
+                                  AudacityProject::OnEffectFlags::kDontRepeatLast);
    }
 
    EffectManager::Get().SetBatchProcessing(ID, false);
@@ -688,7 +689,7 @@ bool BatchCommands::ApplyChain(const wxString & filename)
       return false;
    }
 
-   // Chain was successfully applied; save the new project state
+   // Chain was successfully applied; save the NEW project state
    wxString longDesc, shortDesc;
    wxString name = gPrefs->Read(wxT("/Batch/ActiveChain"), wxEmptyString);
    if (name.IsEmpty())
@@ -775,9 +776,10 @@ wxArrayString BatchCommands::GetNames()
    wxDir::GetAllFiles(FileNames::ChainDir(), &files, wxT("*.txt"), wxDIR_FILES);
    size_t i;
 
+   wxFileName ff;
    for (i = 0; i < files.GetCount(); i++) {
-      wxFileName f(files[i]);
-      names.Add(f.GetName());
+      ff = (files[i]);
+      names.Add(ff.GetName());
    }
 
    return names;

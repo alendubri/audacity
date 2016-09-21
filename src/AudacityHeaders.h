@@ -58,7 +58,6 @@
 #include "NoteTrack.h"
 #include "Prefs.h"
 #include "Project.h"
-#include "Resample.h"
 #include "SampleFormat.h"
 #include "Sequence.h"
 #include "TimeTrack.h"
@@ -72,19 +71,20 @@
 #include "xml/XMLTagHandler.h"
 
 // PRL:  These lines allow you to remove Project.h above.
-// They must be included before the definition of macro new below.
+// They must be included before the definition of macro NEW below.
 #include <set>
 #include <map>
 
 //#ifdef __WXMSW__
 // Enable this to diagnose memory leaks too!
-//    #include <wx/msw/msvcrt.h>      // redefines the new() operator
+//    #include <wx/msw/msvcrt.h>      // redefines the NEW() operator
 //#endif
 
 #if __WXMSW__
 #ifdef _DEBUG
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
+#undef new
 #define DEBUG_NEW new(_NORMAL_BLOCK, __FILE__, __LINE__)
 #define new DEBUG_NEW
 #endif

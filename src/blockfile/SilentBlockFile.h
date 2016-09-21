@@ -21,31 +21,31 @@
 #include "../DirManager.h"
 
 /// A BlockFile containing nothing but silence.  Saves disk space.
-class SilentBlockFile : public BlockFile {
+class SilentBlockFile final : public BlockFile {
  public:
 
    // Constructor / Destructor
 
-   SilentBlockFile(sampleCount sampleLen);
+   SilentBlockFile(size_t sampleLen);
 
    virtual ~SilentBlockFile();
 
    // Reading
 
    /// Read the summary section of the disk file
-   virtual bool ReadSummary(void *data);
+   bool ReadSummary(void *data) override;
    /// Read the data section of the disk file
-   virtual int ReadData(samplePtr data, sampleFormat format,
-                        sampleCount start, sampleCount len);
+   size_t ReadData(samplePtr data, sampleFormat format,
+                        size_t start, size_t len) const override;
 
-   /// Create a new block file identical to this one
-   virtual BlockFile *Copy(wxFileName newFileName);
+   /// Create a NEW block file identical to this one
+   BlockFilePtr Copy(wxFileNameWrapper &&newFileName) override;
    /// Write an XML representation of this file
-   virtual void SaveXML(XMLWriter &xmlFile);
-   virtual wxLongLong GetSpaceUsage();
-   virtual void Recover() { };
+   void SaveXML(XMLWriter &xmlFile) override;
+   DiskByteCount GetSpaceUsage() const override;
+   void Recover() override { };
 
-   static BlockFile *BuildFromXML(DirManager &dm, const wxChar **attrs);
+   static BlockFilePtr BuildFromXML(DirManager &dm, const wxChar **attrs);
 };
 
 #endif

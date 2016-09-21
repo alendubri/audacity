@@ -16,26 +16,27 @@
 #include "Audacity.h"
 #include "TimeTrack.h"
 
+#include <cfloat>
 #include <wx/intl.h>
 #include "AColor.h"
 #include "widgets/Ruler.h"
 #include "Envelope.h"
 #include "Prefs.h"
 #include "Internat.h"
-#include "Resample.h"
 #include "ViewInfo.h"
 
 //TODO-MB: are these sensible values?
 #define TIMETRACK_MIN 0.01
 #define TIMETRACK_MAX 10.0
 
-TimeTrack *TrackFactory::NewTimeTrack()
+std::unique_ptr<TimeTrack> TrackFactory::NewTimeTrack()
 {
-   return new TimeTrack(mDirManager);
+   return std::make_unique<TimeTrack>(mDirManager, mZoomInfo);
 }
 
-TimeTrack::TimeTrack(DirManager *projDirManager):
+TimeTrack::TimeTrack(const std::shared_ptr<DirManager> &projDirManager, const ZoomInfo *zoomInfo):
    Track(projDirManager)
+   , mZoomInfo(zoomInfo)
 {
    mHeight = 100;
 
@@ -43,8 +44,8 @@ TimeTrack::TimeTrack(DirManager *projDirManager):
    mRangeUpper = 1.1;
    mDisplayLog = false;
 
-   mEnvelope = new Envelope();
-   mEnvelope->SetTrackLen(1000000000.0);
+   mEnvelope = std::make_unique<Envelope>();
+   mEnvelope->SetTrackLen(DBL_MAX);
    mEnvelope->SetInterpolateDB(true);
    mEnvelope->Flatten(1.0);
    mEnvelope->Mirror(false);
@@ -54,8 +55,8 @@ TimeTrack::TimeTrack(DirManager *projDirManager):
    SetDefaultName(_("Time Track"));
    SetName(GetDefaultName());
 
-   mRuler = new Ruler;
-   mRuler->SetUseZoomInfo(0);
+   mRuler = std::make_unique<Ruler>();
+   mRuler->SetUseZoomInfo(0, mZoomInfo);
    mRuler->SetLabelEdges(false);
    mRuler->SetFormat(Ruler::TimeFormat);
 
@@ -63,24 +64,25 @@ TimeTrack::TimeTrack(DirManager *projDirManager):
    blankPen.SetColour(214, 214, 214);
 }
 
-TimeTrack::TimeTrack(TimeTrack &orig):
+TimeTrack::TimeTrack(const TimeTrack &orig):
    Track(orig)
+   , mZoomInfo(orig.mZoomInfo)
 {
    Init(orig);	// this copies the TimeTrack metadata (name, range, etc)
 
    ///@TODO: Give Envelope:: a copy-constructor instead of this?
-   mEnvelope = new Envelope();
-   mEnvelope->SetTrackLen(1000000000.0);
+   mEnvelope = std::make_unique<Envelope>();
+   mEnvelope->SetTrackLen(DBL_MAX);
    SetInterpolateLog(orig.GetInterpolateLog()); // this calls Envelope::SetInterpolateDB
    mEnvelope->Flatten(1.0);
    mEnvelope->Mirror(false);
    mEnvelope->SetOffset(0);
    mEnvelope->SetRange(orig.mEnvelope->GetMinValue(), orig.mEnvelope->GetMaxValue());
-   mEnvelope->Paste(0.0, orig.mEnvelope);
+   mEnvelope->Paste(0.0, orig.mEnvelope.get());
 
    ///@TODO: Give Ruler:: a copy-constructor instead of this?
-   mRuler = new Ruler;
-   mRuler->SetUseZoomInfo(0);
+   mRuler = std::make_unique<Ruler>();
+   mRuler->SetUseZoomInfo(0, mZoomInfo);
    mRuler->SetLabelEdges(false);
    mRuler->SetFormat(Ruler::TimeFormat);
 
@@ -101,15 +103,11 @@ void TimeTrack::Init(const TimeTrack &orig)
 
 TimeTrack::~TimeTrack()
 {
-   delete mEnvelope;
-   mEnvelope = NULL;
-
-   delete mRuler;
 }
 
-Track *TimeTrack::Duplicate()
+Track::Holder TimeTrack::Duplicate() const
 {
-   return new TimeTrack(*this);
+   return std::make_unique<TimeTrack>(*this);
 }
 
 bool TimeTrack::GetInterpolateLog() const
@@ -122,17 +120,17 @@ void TimeTrack::SetInterpolateLog(bool interpolateLog) {
 }
 
 //Compute the (average) warp factor between two non-warped time points
-double TimeTrack::ComputeWarpFactor(double t0, double t1)
+double TimeTrack::ComputeWarpFactor(double t0, double t1) const
 {
    return GetEnvelope()->AverageOfInverse(t0, t1);
 }
 
-double TimeTrack::ComputeWarpedLength(double t0, double t1)
+double TimeTrack::ComputeWarpedLength(double t0, double t1) const
 {
    return GetEnvelope()->IntegralOfInverse(t0, t1);
 }
 
-double TimeTrack::SolveWarpedLength(double t0, double length)
+double TimeTrack::SolveWarpedLength(double t0, double length) const
 {
    return GetEnvelope()->SolveIntegralOfInverse(t0, length);
 }
@@ -203,7 +201,7 @@ void TimeTrack::HandleXMLEndTag(const wxChar * WXUNUSED(tag))
 XMLTagHandler *TimeTrack::HandleXMLChild(const wxChar *tag)
 {
    if (!wxStrcmp(tag, wxT("envelope")))
-      return mEnvelope;
+      return mEnvelope.get();
 
   return NULL;
 }
@@ -227,7 +225,7 @@ void TimeTrack::WriteXML(XMLWriter &xmlFile)
    xmlFile.EndTag(wxT("timetrack"));
 }
 
-void TimeTrack::Draw(wxDC & dc, const wxRect & r, const ZoomInfo &zoomInfo)
+void TimeTrack::Draw(wxDC & dc, const wxRect & r, const ZoomInfo &zoomInfo) const
 {
    double min = zoomInfo.PositionToTime(0);
    double max = zoomInfo.PositionToTime(r.width);
@@ -250,7 +248,7 @@ void TimeTrack::Draw(wxDC & dc, const wxRect & r, const ZoomInfo &zoomInfo)
    mRuler->SetFlip(false);  // If we don't do this, the Ruler doesn't redraw itself when the envelope is modified.
                             // I have no idea why!
                             //
-                            // LL:  It's because the ruler only Invalidate()s when the new value is different
+                            // LL:  It's because the ruler only Invalidate()s when the NEW value is different
                             //      than the current value.
    mRuler->SetFlip(GetHeight() > 75 ? true : true); // MB: so why don't we just call Invalidate()? :)
    mRuler->Draw(dc, this);

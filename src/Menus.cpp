@@ -33,6 +33,7 @@ simplifies construction of menu items.
 #include "Audacity.h"
 #include "Project.h"
 
+#include <cfloat>
 #include <iterator>
 #include <limits>
 #include <math.h>
@@ -69,6 +70,7 @@ simplifies construction of menu items.
 #include "export/Export.h"
 #include "export/ExportMultiple.h"
 #include "prefs/PrefsDialog.h"
+#include "prefs/PlaybackPrefs.h"
 #include "ShuttleGui.h"
 #include "HistoryWindow.h"
 #include "LyricsWindow.h"
@@ -90,7 +92,6 @@ simplifies construction of menu items.
 #include "Screenshot.h"
 #include "ondemand/ODManager.h"
 
-#include "Resample.h"
 #include "BatchProcessDialog.h"
 #include "BatchCommands.h"
 #include "prefs/BatchPrefs.h"
@@ -119,6 +120,7 @@ simplifies construction of menu items.
 
 #include "Snap.h"
 
+#include "UndoManager.h"
 #include "WaveTrack.h"
 
 #if defined(EXPERIMENTAL_CRASH_REPORT)
@@ -132,6 +134,11 @@ simplifies construction of menu items.
 #include "scorealign-glue.h"
 #endif /* EXPERIMENTAL_SCOREALIGN */
 
+#include "tracks/ui/Scrubbing.h"
+#include "prefs/TracksPrefs.h"
+
+#include "widgets/Meter.h"
+
 enum {
    kAlignStartZero = 0,
    kAlignStartSelStart,
@@ -143,65 +150,19 @@ enum {
    kAlignTogether
 };
 
+// Post Timer Recording Actions
+// Ensure this matches the enum in TimerRecordDialog.cpp
+enum {
+   POST_TIMER_RECORD_STOPPED = -3,
+   POST_TIMER_RECORD_CANCEL_WAIT,
+   POST_TIMER_RECORD_CANCEL,
+   POST_TIMER_RECORD_NOTHING,
+   POST_TIMER_RECORD_CLOSE,
+   POST_TIMER_RECORD_RESTART,
+   POST_TIMER_RECORD_SHUTDOWN
+};
 
-AudacityProjectCommandFunctor::AudacityProjectCommandFunctor(AudacityProject *project,
-                              audCommandFunction commandFunction)
-{
-   mProject = project;
-   mCommandFunction = commandFunction;
-   mCommandKeyFunction = NULL;
-   mCommandListFunction = NULL;
-   mCommandPluginFunction = NULL;
-}
-
-AudacityProjectCommandFunctor::AudacityProjectCommandFunctor(AudacityProject *project,
-                              audCommandKeyFunction commandFunction)
-{
-   mProject = project;
-   mCommandFunction = NULL;
-   mCommandKeyFunction = commandFunction;
-   mCommandListFunction = NULL;
-   mCommandPluginFunction = NULL;
-}
-
-AudacityProjectCommandFunctor::AudacityProjectCommandFunctor(AudacityProject *project,
-                              audCommandListFunction commandFunction)
-{
-   mProject = project;
-   mCommandFunction = NULL;
-   mCommandKeyFunction = NULL;
-   mCommandListFunction = commandFunction;
-   mCommandPluginFunction = NULL;
-}
-
-AudacityProjectCommandFunctor::AudacityProjectCommandFunctor(AudacityProject *project,
-                              audCommandPluginFunction commandFunction,
-                              const PluginID & pluginID)
-{
-   mProject = project;
-   mCommandFunction = NULL;
-   mCommandKeyFunction = NULL;
-   mCommandListFunction = NULL;
-   mCommandPluginFunction = commandFunction;
-   mPluginID = pluginID;
-}
-
-void AudacityProjectCommandFunctor::operator()(int index, const wxEvent * evt)
-{
-   if (mCommandPluginFunction)
-      (mProject->*(mCommandPluginFunction)) (mPluginID, AudacityProject::OnEffectFlags::kNone);
-   else if (mCommandListFunction)
-      (mProject->*(mCommandListFunction)) (index);
-   else if (mCommandKeyFunction)
-      (mProject->*(mCommandKeyFunction)) (evt);
-   else
-      (mProject->*(mCommandFunction)) ();
-}
-
-#define FN(X) new AudacityProjectCommandFunctor(this, &AudacityProject:: X )
-#define FNI(X, I) new AudacityProjectCommandFunctor(this, &AudacityProject:: X, I)
-#define FNS(X, S) new AudacityProjectCommandFunctor(this, &AudacityProject:: X, S)
-
+#include "commands/CommandFunctors.h"
 //
 // Effects menu arrays
 //
@@ -328,771 +289,813 @@ void AudacityProject::CreateMenusAndCommands()
    wxArrayString names;
    wxArrayInt indices;
 
-   wxMenuBar *menubar = c->AddMenuBar(wxT("appmenu"));
+   {
+      auto menubar = c->AddMenuBar(wxT("appmenu"));
+      wxASSERT(menubar);
 
-   /////////////////////////////////////////////////////////////////////////////
-   // File menu
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
+      // File menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&File"));
-   c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
+      c->BeginMenu(_("&File"));
+      c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
 
-   /*i18n-hint: "New" is an action (verb) to create a new project*/
-   c->AddItem(wxT("New"), _("&New"), FN(OnNew), wxT("Ctrl+N"),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
+      /*i18n-hint: "New" is an action (verb) to create a NEW project*/
+      c->AddItem(wxT("New"), _("&New"), FN(OnNew), wxT("Ctrl+N"),
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   /*i18n-hint: (verb)*/
-   c->AddItem(wxT("Open"), _("&Open..."), FN(OnOpen), wxT("Ctrl+O"),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
+      /*i18n-hint: (verb)*/
+      c->AddItem(wxT("Open"), _("&Open..."), FN(OnOpen), wxT("Ctrl+O"),
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   CreateRecentFilesMenu(c);
+      CreateRecentFilesMenu(c);
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("Close"), _("&Close"), FN(OnClose), wxT("Ctrl+W"));
+      c->AddItem(wxT("Close"), _("&Close"), FN(OnClose), wxT("Ctrl+W"));
 
-   c->AddItem(wxT("Save"), _("&Save Project"), FN(OnSave), wxT("Ctrl+S"),
-              AudioIONotBusyFlag | UnsavedChangesFlag,
-              AudioIONotBusyFlag | UnsavedChangesFlag);
-   c->AddItem(wxT("SaveAs"), _("Save Project &As..."), FN(OnSaveAs));
+      c->AddItem(wxT("Save"), _("&Save Project"), FN(OnSave), wxT("Ctrl+S"),
+         AudioIONotBusyFlag | UnsavedChangesFlag,
+         AudioIONotBusyFlag | UnsavedChangesFlag);
+      c->AddItem(wxT("SaveAs"), _("Save Project &As..."), FN(OnSaveAs));
 #ifdef USE_LIBVORBIS
-   c->AddItem(wxT("SaveCompressed"), _("Save Compressed Copy of Project..."), FN(OnSaveCompressed));
+      c->AddItem(wxT("SaveCompressed"), _("Sa&ve Compressed Copy of Project..."), FN(OnSaveCompressed));
 #endif
 
-   c->AddItem(wxT("CheckDeps"), _("Chec&k Dependencies..."), FN(OnCheckDependencies));
+      c->AddItem(wxT("CheckDeps"), _("Chec&k Dependencies..."), FN(OnCheckDependencies));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("EditMetaData"), _("Edit Me&tadata..."), FN(OnEditMetadata));
+      c->AddItem(wxT("EditMetaData"), _("Edit Me&tadata Tags..."), FN(OnEditMetadata));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("&Import"));
+      c->BeginSubMenu(_("&Import"));
 
-   c->AddItem(wxT("ImportAudio"), _("&Audio..."), FN(OnImport), wxT("Ctrl+Shift+I"));
-   c->AddItem(wxT("ImportLabels"), _("&Labels..."), FN(OnImportLabels));
+      c->AddItem(wxT("ImportAudio"), _("&Audio..."), FN(OnImport), wxT("Ctrl+Shift+I"));
+      c->AddItem(wxT("ImportLabels"), _("&Labels..."), FN(OnImportLabels));
 #ifdef USE_MIDI
-   c->AddItem(wxT("ImportMIDI"), _("&MIDI..."), FN(OnImportMIDI));
+      c->AddItem(wxT("ImportMIDI"), _("&MIDI..."), FN(OnImportMIDI));
 #endif // USE_MIDI
-   c->AddItem(wxT("ImportRaw"), _("&Raw Data..."), FN(OnImportRaw));
+      c->AddItem(wxT("ImportRaw"), _("&Raw Data..."), FN(OnImportRaw));
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   // Enable Export audio commands only when there are audio tracks.
-   c->AddItem(wxT("Export"), _("&Export Audio..."), FN(OnExport), wxT("Ctrl+Shift+E"),
-              AudioIONotBusyFlag | WaveTracksExistFlag,
-              AudioIONotBusyFlag | WaveTracksExistFlag);
+      // Enable Export audio commands only when there are audio tracks.
+      c->AddItem(wxT("Export"), _("&Export Audio..."), FN(OnExport), wxT("Ctrl+Shift+E"),
+         AudioIONotBusyFlag | WaveTracksExistFlag,
+         AudioIONotBusyFlag | WaveTracksExistFlag);
 
-   // Enable Export Selection commands only when there's a selection.
-   c->AddItem(wxT("ExportSel"), _("Expo&rt Selected Audio..."), FN(OnExportSelection),
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
+      // Enable Export Selection commands only when there's a selection.
+      c->AddItem(wxT("ExportSel"), _("Expo&rt Selected Audio..."), FN(OnExportSelection),
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
 
-   c->AddItem(wxT("ExportLabels"), _("Export &Labels..."), FN(OnExportLabels),
-              AudioIONotBusyFlag | LabelTracksExistFlag,
-              AudioIONotBusyFlag | LabelTracksExistFlag);
-   // Enable Export audio commands only when there are audio tracks.
-   c->AddItem(wxT("ExportMultiple"), _("Export &Multiple..."), FN(OnExportMultiple), wxT("Ctrl+Shift+L"),
-              AudioIONotBusyFlag | WaveTracksExistFlag,
-              AudioIONotBusyFlag | WaveTracksExistFlag);
+      c->AddItem(wxT("ExportLabels"), _("Export &Labels..."), FN(OnExportLabels),
+         AudioIONotBusyFlag | LabelTracksExistFlag,
+         AudioIONotBusyFlag | LabelTracksExistFlag);
+      // Enable Export audio commands only when there are audio tracks.
+      c->AddItem(wxT("ExportMultiple"), _("Export &Multiple..."), FN(OnExportMultiple), wxT("Ctrl+Shift+L"),
+         AudioIONotBusyFlag | WaveTracksExistFlag,
+         AudioIONotBusyFlag | WaveTracksExistFlag);
 #if defined(USE_MIDI)
-   c->AddItem(wxT("ExportMIDI"),   _("Export MIDI..."), FN(OnExportMIDI),
-              AudioIONotBusyFlag | NoteTracksSelectedFlag,
-              AudioIONotBusyFlag | NoteTracksSelectedFlag);
+      c->AddItem(wxT("ExportMIDI"), _("Export MI&DI..."), FN(OnExportMIDI),
+         AudioIONotBusyFlag | NoteTracksSelectedFlag,
+         AudioIONotBusyFlag | NoteTracksSelectedFlag);
 #endif
 
-   c->AddSeparator();
-   c->AddItem(wxT("ApplyChain"), _("Appl&y Chain..."), FN(OnApplyChain),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
-   c->AddItem(wxT("EditChains"), _("Edit C&hains..."), FN(OnEditChains));
+      c->AddSeparator();
+      c->AddItem(wxT("ApplyChain"), _("Appl&y Chain..."), FN(OnApplyChain),
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
+      c->AddItem(wxT("EditChains"), _("Edit C&hains..."), FN(OnEditChains));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("PageSetup"), _("Pa&ge Setup..."), FN(OnPageSetup),
-              AudioIONotBusyFlag | TracksExistFlag,
-              AudioIONotBusyFlag | TracksExistFlag);
-   /* i18n-hint: (verb) It's item on a menu. */
-   c->AddItem(wxT("Print"), _("&Print..."), FN(OnPrint),
-              AudioIONotBusyFlag | TracksExistFlag,
-              AudioIONotBusyFlag | TracksExistFlag);
+      c->AddItem(wxT("PageSetup"), _("Pa&ge Setup..."), FN(OnPageSetup),
+         AudioIONotBusyFlag | TracksExistFlag,
+         AudioIONotBusyFlag | TracksExistFlag);
+      /* i18n-hint: (verb) It's item on a menu. */
+      c->AddItem(wxT("Print"), _("&Print..."), FN(OnPrint),
+         AudioIONotBusyFlag | TracksExistFlag,
+         AudioIONotBusyFlag | TracksExistFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   // On the Mac, the Exit item doesn't actually go here...wxMac will pull it out
-   // and put it in the Audacity menu for us based on its ID.
-   /* i18n-hint: (verb) It's item on a menu. */
-   c->AddItem(wxT("Exit"), _("E&xit"), FN(OnExit), wxT("Ctrl+Q"),
-              AlwaysEnabledFlag,
-              AlwaysEnabledFlag);
+      // On the Mac, the Exit item doesn't actually go here...wxMac will pull it out
+      // and put it in the Audacity menu for us based on its ID.
+      /* i18n-hint: (verb) It's item on a menu. */
+      c->AddItem(wxT("Exit"), _("E&xit"), FN(OnExit), wxT("Ctrl+Q"),
+         AlwaysEnabledFlag,
+         AlwaysEnabledFlag);
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
-   // Edit Menu
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
+      // Edit Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&Edit"));
+      c->BeginMenu(_("&Edit"));
 
-   c->SetDefaultFlags(AudioIONotBusyFlag | TimeSelectedFlag | TracksSelectedFlag,
-                      AudioIONotBusyFlag | TimeSelectedFlag | TracksSelectedFlag);
+      c->SetDefaultFlags(AudioIONotBusyFlag | TimeSelectedFlag | TracksSelectedFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | TracksSelectedFlag);
 
-   c->AddItem(wxT("Undo"), _("&Undo"), FN(OnUndo), wxT("Ctrl+Z"),
-              AudioIONotBusyFlag | UndoAvailableFlag,
-              AudioIONotBusyFlag | UndoAvailableFlag);
+      c->AddItem(wxT("Undo"), _("&Undo"), FN(OnUndo), wxT("Ctrl+Z"),
+         AudioIONotBusyFlag | UndoAvailableFlag,
+         AudioIONotBusyFlag | UndoAvailableFlag);
 
-   // The default shortcut key for Redo is different on different platforms.
-   wxString key =
+      // The default shortcut key for Redo is different on different platforms.
+      wxString key =
 #ifdef __WXMSW__
-      wxT("Ctrl+Y");
+         wxT("Ctrl+Y");
 #else
-      wxT("Ctrl+Shift+Z");
+         wxT("Ctrl+Shift+Z");
 #endif
 
-   c->AddItem(wxT("Redo"), _("&Redo"), FN(OnRedo), key,
-              AudioIONotBusyFlag | RedoAvailableFlag,
-              AudioIONotBusyFlag | RedoAvailableFlag);
+      c->AddItem(wxT("Redo"), _("&Redo"), FN(OnRedo), key,
+         AudioIONotBusyFlag | RedoAvailableFlag,
+         AudioIONotBusyFlag | RedoAvailableFlag);
 
-   ModifyUndoMenuItems();
+      ModifyUndoMenuItems();
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   // Basic Edit coomands
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Cut"), _("Cu&t"), FN(OnCut), wxT("Ctrl+X"),
-              AudioIONotBusyFlag | CutCopyAvailableFlag,
-              AudioIONotBusyFlag | CutCopyAvailableFlag);
-   c->AddItem(wxT("Delete"), _("&Delete"), FN(OnDelete), wxT("Ctrl+K"));
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Copy"), _("&Copy"), FN(OnCopy), wxT("Ctrl+C"),
-              AudioIONotBusyFlag | CutCopyAvailableFlag,
-              AudioIONotBusyFlag | CutCopyAvailableFlag);
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Paste"), _("&Paste"), FN(OnPaste), wxT("Ctrl+V"),
-              AudioIONotBusyFlag | ClipboardFlag,
-              AudioIONotBusyFlag | ClipboardFlag);
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Duplicate"), _("Duplic&ate"), FN(OnDuplicate), wxT("Ctrl+D"));
+      // Basic Edit coomands
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Cut"), _("Cu&t"), FN(OnCut), wxT("Ctrl+X"),
+         AudioIONotBusyFlag | CutCopyAvailableFlag,
+         AudioIONotBusyFlag | CutCopyAvailableFlag);
+      c->AddItem(wxT("Delete"), _("&Delete"), FN(OnDelete), wxT("Ctrl+K"));
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Copy"), _("&Copy"), FN(OnCopy), wxT("Ctrl+C"),
+         AudioIONotBusyFlag | CutCopyAvailableFlag,
+         AudioIONotBusyFlag | CutCopyAvailableFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Paste"), _("&Paste"), FN(OnPaste), wxT("Ctrl+V"),
+         AudioIONotBusyFlag | ClipboardFlag,
+         AudioIONotBusyFlag | ClipboardFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Duplicate"), _("Duplic&ate"), FN(OnDuplicate), wxT("Ctrl+D"));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->BeginSubMenu(_("R&emove Special"));
-   /* i18n-hint: (verb) Do a special kind of cut*/
-   c->AddItem(wxT("SplitCut"), _("Spl&it Cut"), FN(OnSplitCut), wxT("Ctrl+Alt+X"));
-   /* i18n-hint: (verb) Do a special kind of delete*/
-   c->AddItem(wxT("SplitDelete"), _("Split D&elete"), FN(OnSplitDelete), wxT("Ctrl+Alt+K"));
+      c->BeginSubMenu(_("R&emove Special"));
+      /* i18n-hint: (verb) Do a special kind of cut*/
+      c->AddItem(wxT("SplitCut"), _("Spl&it Cut"), FN(OnSplitCut), wxT("Ctrl+Alt+X"));
+      /* i18n-hint: (verb) Do a special kind of DELETE*/
+      c->AddItem(wxT("SplitDelete"), _("Split D&elete"), FN(OnSplitDelete), wxT("Ctrl+Alt+K"));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Silence"), _("Silence Audi&o"), FN(OnSilence), wxT("Ctrl+L"),
-      AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-      AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
-    /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Trim"), _("Tri&m Audio"), FN(OnTrim), wxT("Ctrl+T"),
-      AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-      AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
-   c->EndSubMenu();
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Silence"), _("Silence Audi&o"), FN(OnSilence), wxT("Ctrl+L"),
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Trim"), _("Tri&m Audio"), FN(OnTrim), wxT("Ctrl+T"),
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
+      c->EndSubMenu();
 
-   c->AddItem(wxT("PasteNewLabel"), _("Paste Te&xt to New Label"), FN(OnPasteNewLabel), wxT("Ctrl+Alt+V"),
-              AudioIONotBusyFlag, AudioIONotBusyFlag);
-
-
-   c->AddSeparator();
-
-   /////////////////////////////////////////////////////////////////////////////
-
-   c->BeginSubMenu(_("Clip B&oundaries"));
-   /* i18n-hint: (verb) It's an item on a menu. */
-   c->AddItem(wxT("Split"), _("Sp&lit"), FN(OnSplit), wxT("Ctrl+I"),
-              AudioIONotBusyFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | WaveTracksSelectedFlag);
-   c->AddItem(wxT("SplitNew"), _("Split Ne&w"), FN(OnSplitNew), wxT("Ctrl+Alt+I"),
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
-   c->AddSeparator();
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Join"), _("&Join"), FN(OnJoin), wxT("Ctrl+J"));
-   c->AddItem(wxT("Disjoin"), _("Detac&h at Silences"), FN(OnDisjoin), wxT("Ctrl+Alt+J"));
-   c->EndSubMenu();
-
-   c->AddSeparator();
-
-   /////////////////////////////////////////////////////////////////////////////
-
-   c->BeginSubMenu(_("La&beled Audio"));
-   c->SetDefaultFlags(AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag,
-                      AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag);
-
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("CutLabels"), _("&Cut"), FN(OnCutLabels), wxT("Alt+X"),
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag |  TimeSelectedFlag | IsNotSyncLockedFlag,
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag |  TimeSelectedFlag | IsNotSyncLockedFlag);
-   c->AddItem(wxT("DeleteLabels"), _("&Delete"), FN(OnDeleteLabels), wxT("Alt+K"),
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag |  TimeSelectedFlag | IsNotSyncLockedFlag,
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag |  TimeSelectedFlag | IsNotSyncLockedFlag);
-
-   c->AddSeparator();
-
-   /* i18n-hint: (verb) A special way to cut out a piece of audio*/
-   c->AddItem(wxT("SplitCutLabels"), _("&Split Cut"), FN(OnSplitCutLabels), wxT("Alt+Shift+X"));
-   c->AddItem(wxT("SplitDeleteLabels"), _("Sp&lit Delete"), FN(OnSplitDeleteLabels), wxT("Alt+Shift+K"));
-
-   c->AddSeparator();
+      c->AddItem(wxT("PasteNewLabel"), _("Paste Te&xt to New Label"), FN(OnPasteNewLabel), wxT("Ctrl+Alt+V"),
+         AudioIONotBusyFlag, AudioIONotBusyFlag);
 
 
-   c->AddItem(wxT("SilenceLabels"), _("Silence &Audio"), FN(OnSilenceLabels), wxT("Alt+L"));
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("CopyLabels"), _("Co&py"), FN(OnCopyLabels), wxT("Alt+Shift+C"));
+      c->AddSeparator();
 
-   c->AddSeparator();
+      /////////////////////////////////////////////////////////////////////////////
 
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("SplitLabels"), _("Spli&t"), FN(OnSplitLabels), wxT("Alt+I"),
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag,
-              AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag);
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("JoinLabels"), _("&Join"),  FN(OnJoinLabels), wxT("Alt+J"));
-   c->AddItem(wxT("DisjoinLabels"), _("Detac&h at Silences"), FN(OnDisjoinLabels), wxT("Alt+Shift+J"));
+      c->BeginSubMenu(_("Clip B&oundaries"));
+      /* i18n-hint: (verb) It's an item on a menu. */
+      c->AddItem(wxT("Split"), _("Sp&lit"), FN(OnSplit), wxT("Ctrl+I"),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag);
+      c->AddItem(wxT("SplitNew"), _("Split Ne&w"), FN(OnSplitNew), wxT("Ctrl+Alt+I"),
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag);
+      c->AddSeparator();
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Join"), _("&Join"), FN(OnJoin), wxT("Ctrl+J"));
+      c->AddItem(wxT("Disjoin"), _("Detac&h at Silences"), FN(OnDisjoin), wxT("Ctrl+Alt+J"));
+      c->EndSubMenu();
 
-   c->EndSubMenu();
+      c->AddSeparator();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   /* i18n-hint: (verb) It's an item on a menu. */
-   c->BeginSubMenu(_("&Select"));
-   c->SetDefaultFlags(TracksExistFlag, TracksExistFlag);
+      c->BeginSubMenu(_("La&beled Audio"));
+      c->SetDefaultFlags(AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag,
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag);
 
-   c->AddItem(wxT("SelectAll"), _("&All"), FN(OnSelectAll), wxT("Ctrl+A"));
-   c->AddItem(wxT("SelectNone"), _("&None"), FN(OnSelectNone), wxT("Ctrl+Shift+A"));
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("CutLabels"), _("&Cut"), FN(OnCutLabels), wxT("Alt+X"),
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag | IsNotSyncLockedFlag,
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag | IsNotSyncLockedFlag);
+      c->AddItem(wxT("DeleteLabels"), _("&Delete"), FN(OnDeleteLabels), wxT("Alt+K"),
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag | IsNotSyncLockedFlag,
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag | TimeSelectedFlag | IsNotSyncLockedFlag);
+
+      c->AddSeparator();
+
+      /* i18n-hint: (verb) A special way to cut out a piece of audio*/
+      c->AddItem(wxT("SplitCutLabels"), _("&Split Cut"), FN(OnSplitCutLabels), wxT("Alt+Shift+X"));
+      c->AddItem(wxT("SplitDeleteLabels"), _("Sp&lit Delete"), FN(OnSplitDeleteLabels), wxT("Alt+Shift+K"));
+
+      c->AddSeparator();
+
+
+      c->AddItem(wxT("SilenceLabels"), _("Silence &Audio"), FN(OnSilenceLabels), wxT("Alt+L"));
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("CopyLabels"), _("Co&py"), FN(OnCopyLabels), wxT("Alt+Shift+C"));
+
+      c->AddSeparator();
+
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("SplitLabels"), _("Spli&t"), FN(OnSplitLabels), wxT("Alt+I"),
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag,
+         AudioIONotBusyFlag | LabelsSelectedFlag | WaveTracksExistFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("JoinLabels"), _("&Join"), FN(OnJoinLabels), wxT("Alt+J"));
+      c->AddItem(wxT("DisjoinLabels"), _("Detac&h at Silences"), FN(OnDisjoinLabels), wxT("Alt+Shift+J"));
+
+      c->EndSubMenu();
+
+      /////////////////////////////////////////////////////////////////////////////
+
+      /* i18n-hint: (verb) It's an item on a menu. */
+      c->BeginSubMenu(_("&Select"));
+      c->SetDefaultFlags(TracksExistFlag, TracksExistFlag);
+
+      c->AddItem(wxT("SelectAll"), _("&All"), FN(OnSelectAll), wxT("Ctrl+A"));
+      c->AddItem(wxT("SelectNone"), _("&None"), FN(OnSelectNone), wxT("Ctrl+Shift+A"));
 
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
-   c->BeginSubMenu(_("S&pectral"));
-   c->AddItem(wxT("ToggleSpectralSelection"), _("To&ggle spectral selection"), FN(OnToggleSpectralSelection), wxT("Q"));
-   c->AddItem(wxT("NextHigherPeakFrequency"), _("Next Higher Peak Frequency"), FN(OnNextHigherPeakFrequency));
-   c->AddItem(wxT("NextLowerPeakFrequency"), _("Next Lower Peak Frequency"), FN(OnNextLowerPeakFrequency));
-   c->EndSubMenu();
+      c->BeginSubMenu(_("S&pectral"));
+      c->AddItem(wxT("ToggleSpectralSelection"), _("To&ggle spectral selection"), FN(OnToggleSpectralSelection), wxT("Q"));
+      c->AddItem(wxT("NextHigherPeakFrequency"), _("Next Higher Peak Frequency"), FN(OnNextHigherPeakFrequency));
+      c->AddItem(wxT("NextLowerPeakFrequency"), _("Next Lower Peak Frequency"), FN(OnNextLowerPeakFrequency));
+      c->EndSubMenu();
 #endif
 
-   c->AddItem(wxT("SetLeftSelection"), _("&Left at Playback Position"), FN(OnSetLeftSelection), wxT("["));
-   c->AddItem(wxT("SetRightSelection"), _("&Right at Playback Position"), FN(OnSetRightSelection), wxT("]"));
+      c->AddItem(wxT("SetLeftSelection"), _("&Left at Playback Position"), FN(OnSetLeftSelection), wxT("["));
+      c->AddItem(wxT("SetRightSelection"), _("&Right at Playback Position"), FN(OnSetRightSelection), wxT("]"));
 
-   c->SetDefaultFlags(TracksSelectedFlag, TracksSelectedFlag);
+      c->SetDefaultFlags(TracksSelectedFlag, TracksSelectedFlag);
 
-   c->AddItem(wxT("SelStartCursor"), _("Track &Start to Cursor"), FN(OnSelectStartCursor), wxT("Shift+J"));
-   c->AddItem(wxT("SelCursorEnd"), _("Cursor to Track &End"), FN(OnSelectCursorEnd), wxT("Shift+K"));
+      c->AddItem(wxT("SelStartCursor"), _("Track &Start to Cursor"), FN(OnSelectStartCursor), wxT("Shift+J"));
+      c->AddItem(wxT("SelCursorEnd"), _("Cursor to Track &End"), FN(OnSelectCursorEnd), wxT("Shift+K"));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("SelAllTracks"), _("In All &Tracks"), FN(OnSelectAllTracks),
+      c->AddItem(wxT("SelAllTracks"), _("In All &Tracks"), FN(OnSelectAllTracks),
          wxT("Ctrl+Shift+K"),
          TracksExistFlag, TracksExistFlag);
 
 #ifdef EXPERIMENTAL_SYNC_LOCK
-   c->AddItem(wxT("SelSyncLockTracks"), _("In All S&ync-Locked Tracks"),
-               FN(OnSelectSyncLockSel), wxT("Ctrl+Shift+Y"),
-               TracksSelectedFlag | IsSyncLockedFlag,
-               TracksSelectedFlag | IsSyncLockedFlag);
+      c->AddItem(wxT("SelSyncLockTracks"), _("In All S&ync-Locked Tracks"),
+         FN(OnSelectSyncLockSel), wxT("Ctrl+Shift+Y"),
+         TracksSelectedFlag | IsSyncLockedFlag,
+         TracksSelectedFlag | IsSyncLockedFlag);
 #endif
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->AddItem(wxT("ZeroCross"), _("Find &Zero Crossings"), FN(OnZeroCrossing), wxT("Z"));
+      c->AddItem(wxT("ZeroCross"), _("Find &Zero Crossings"), FN(OnZeroCrossing), wxT("Z"));
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("Mo&ve Cursor"));
+      c->BeginSubMenu(_("Mo&ve Cursor"));
 
-   c->AddItem(wxT("CursSelStart"), _("to Selection Star&t"), FN(OnCursorSelStart));
-   c->AddItem(wxT("CursSelEnd"), _("to Selection En&d"), FN(OnCursorSelEnd));
+      c->AddItem(wxT("CursSelStart"), _("to Selection Star&t"), FN(OnCursorSelStart));
+      c->AddItem(wxT("CursSelEnd"), _("to Selection En&d"), FN(OnCursorSelEnd));
 
-   c->AddItem(wxT("CursTrackStart"), _("to Track &Start"), FN(OnCursorTrackStart), wxT("J"));
-   c->AddItem(wxT("CursTrackEnd"), _("to Track &End"), FN(OnCursorTrackEnd), wxT("K"));
+      c->AddItem(wxT("CursTrackStart"), _("to Track &Start"), FN(OnCursorTrackStart), wxT("J"));
+      c->AddItem(wxT("CursTrackEnd"), _("to Track &End"), FN(OnCursorTrackEnd), wxT("K"));
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("SelSave"), _("Re&gion Save"), FN(OnSelectionSave),
-              WaveTracksSelectedFlag,
-              WaveTracksSelectedFlag);
-   c->AddItem(wxT("SelRestore"), _("Regio&n Restore"), FN(OnSelectionRestore),
-              TracksExistFlag,
-              TracksExistFlag);
+      c->AddItem(wxT("SelSave"), _("Re&gion Save"), FN(OnSelectionSave),
+         WaveTracksSelectedFlag,
+         WaveTracksSelectedFlag);
+      c->AddItem(wxT("SelRestore"), _("Regio&n Restore"), FN(OnSelectionRestore),
+         TracksExistFlag,
+         TracksExistFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("Pla&y Region"));
+      c->BeginSubMenu(_("Pla&y Region"));
 
-   c->AddItem(wxT("LockPlayRegion"), _("&Lock"), FN(OnLockPlayRegion),
-              PlayRegionNotLockedFlag,
-              PlayRegionNotLockedFlag);
-   c->AddItem(wxT("UnlockPlayRegion"), _("&Unlock"), FN(OnUnlockPlayRegion),
-              PlayRegionLockedFlag,
-              PlayRegionLockedFlag);
+      c->AddItem(wxT("LockPlayRegion"), _("&Lock"), FN(OnLockPlayRegion),
+         PlayRegionNotLockedFlag,
+         PlayRegionNotLockedFlag);
+      c->AddItem(wxT("UnlockPlayRegion"), _("&Unlock"), FN(OnUnlockPlayRegion),
+         PlayRegionLockedFlag,
+         PlayRegionLockedFlag);
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
 #ifndef __WXMAC__
-   c->AddSeparator();
+      c->AddSeparator();
 #endif
 
-   // The default shortcut key for Preferences is different on different platforms.
-   key =
+      // The default shortcut key for Preferences is different on different platforms.
+      key =
 #ifdef __WXMAC__
-      wxT("Ctrl+,");
+         wxT("Ctrl+,");
 #else
-      wxT("Ctrl+P");
+         wxT("Ctrl+P");
 #endif
 
-   c->AddItem(wxT("Preferences"), _("Pre&ferences..."), FN(OnPreferences), key,
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
+      c->AddItem(wxT("Preferences"), _("Pre&ferences..."), FN(OnPreferences), key,
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
-   // View Menu
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
+      // View Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&View"));
-   c->SetDefaultFlags(TracksExistFlag, TracksExistFlag);
+      c->BeginMenu(_("&View"));
+      c->SetDefaultFlags(TracksExistFlag, TracksExistFlag);
 
-   c->AddItem(wxT("ZoomIn"), _("Zoom &In"), FN(OnZoomIn), wxT("Ctrl+1"),
-              ZoomInAvailableFlag,
-              ZoomInAvailableFlag);
-   c->AddItem(wxT("ZoomNormal"), _("Zoom &Normal"), FN(OnZoomNormal), wxT("Ctrl+2"));
-   c->AddItem(wxT("ZoomOut"), _("Zoom &Out"), FN(OnZoomOut), wxT("Ctrl+3"),
-              ZoomOutAvailableFlag,
-              ZoomOutAvailableFlag);
-   c->AddItem(wxT("ZoomSel"), _("&Zoom to Selection"), FN(OnZoomSel), wxT("Ctrl+E"), TimeSelectedFlag, TimeSelectedFlag);
+      c->AddItem(wxT("ZoomIn"), _("Zoom &In"), FN(OnZoomIn), wxT("Ctrl+1"),
+         ZoomInAvailableFlag,
+         ZoomInAvailableFlag);
+      c->AddItem(wxT("ZoomNormal"), _("Zoom &Normal"), FN(OnZoomNormal), wxT("Ctrl+2"));
+      c->AddItem(wxT("ZoomOut"), _("Zoom &Out"), FN(OnZoomOut), wxT("Ctrl+3"),
+         ZoomOutAvailableFlag,
+         ZoomOutAvailableFlag);
+      c->AddItem(wxT("ZoomSel"), _("&Zoom to Selection"), FN(OnZoomSel), wxT("Ctrl+E"), TimeSelectedFlag, TimeSelectedFlag);
 
-   c->AddSeparator();
-   c->AddItem(wxT("FitInWindow"), _("&Fit in Window"), FN(OnZoomFit), wxT("Ctrl+F"));
-   c->AddItem(wxT("FitV"), _("Fit &Vertically"), FN(OnZoomFitV), wxT("Ctrl+Shift+F"));
+      c->AddSeparator();
+      c->AddItem(wxT("FitInWindow"), _("&Fit in Window"), FN(OnZoomFit), wxT("Ctrl+F"));
+      c->AddItem(wxT("FitV"), _("Fit &Vertically"), FN(OnZoomFitV), wxT("Ctrl+Shift+F"));
 
-   c->AddSeparator();
-   c->AddItem(wxT("GoSelStart"), _("Go to Selection Sta&rt"), FN(OnGoSelStart), wxT("Ctrl+["), TimeSelectedFlag, TimeSelectedFlag);
-   c->AddItem(wxT("GoSelEnd"), _("Go to Selection En&d"), FN(OnGoSelEnd), wxT("Ctrl+]"), TimeSelectedFlag, TimeSelectedFlag);
+      c->AddSeparator();
+      c->AddItem(wxT("GoSelStart"), _("Go to Selection Sta&rt"), FN(OnGoSelStart), wxT("Ctrl+["), TimeSelectedFlag, TimeSelectedFlag);
+      c->AddItem(wxT("GoSelEnd"), _("Go to Selection En&d"), FN(OnGoSelEnd), wxT("Ctrl+]"), TimeSelectedFlag, TimeSelectedFlag);
 
-   c->AddSeparator();
-   c->AddItem(wxT("CollapseAllTracks"), _("&Collapse All Tracks"), FN(OnCollapseAllTracks), wxT("Ctrl+Shift+C"));
-   c->AddItem(wxT("ExpandAllTracks"), _("E&xpand All Tracks"), FN(OnExpandAllTracks), wxT("Ctrl+Shift+X"));
+      c->AddSeparator();
+      c->AddItem(wxT("CollapseAllTracks"), _("&Collapse All Tracks"), FN(OnCollapseAllTracks), wxT("Ctrl+Shift+C"));
+      c->AddItem(wxT("ExpandAllTracks"), _("E&xpand All Tracks"), FN(OnExpandAllTracks), wxT("Ctrl+Shift+X"));
 
-   c->AddSeparator();
-   c->AddCheck(wxT("ShowClipping"), _("&Show Clipping"), FN(OnShowClipping),
-               gPrefs->Read(wxT("/GUI/ShowClipping"), 0L), AlwaysEnabledFlag, AlwaysEnabledFlag);
+      c->AddSeparator();
+      c->AddCheck(wxT("ShowClipping"), _("&Show Clipping"), FN(OnShowClipping),
+         gPrefs->Read(wxT("/GUI/ShowClipping"), 0L), AlwaysEnabledFlag, AlwaysEnabledFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   // History window should be available either for UndoAvailableFlag or RedoAvailableFlag,
-   // but we can't make the AddItem flags and mask have both, because they'd both have to be true for the
-   // command to be enabled.
-   //    If user has Undone the entire stack, RedoAvailableFlag is on but UndoAvailableFlag is off.
-   //    If user has done things but not Undone anything, RedoAvailableFlag is off but UndoAvailableFlag is on.
-   // So in either of those cases, (AudioIONotBusyFlag | UndoAvailableFlag | RedoAvailableFlag) mask
-   // would fail.
-   // The only way to fix this in the current architecture is to hack in special cases for RedoAvailableFlag
-   // in AudacityProject::UpdateMenus() (ugly) and CommandManager::HandleCommandEntry() (*really* ugly --
-   // shouldn't know about particular command names and flags).
-   // Here's the hack that would be necessary in AudacityProject::UpdateMenus(), if somebody decides to do it:
-   //    // Because EnableUsingFlags requires all the flag bits match the corresponding mask bits,
-   //    // "UndoHistory" specifies only AudioIONotBusyFlag | UndoAvailableFlag, because that
-   //    // covers the majority of cases where it should be enabled.
-   //    // If history is not empty but we've Undone the whole stack, we also want to enable,
-   //    // to show the Redo's on stack.
-   //    // "UndoHistory" might already be enabled, but add this check for RedoAvailableFlag.
-   //    if (flags & RedoAvailableFlag)
-   //       mCommandManager.Enable(wxT("UndoHistory"), true);
-   // So for now, enable the command regardless of stack. It will just show empty sometimes.
-   // FOR REDESIGN, clearly there are some limitations with the flags/mask bitmaps.
+      // History window should be available either for UndoAvailableFlag or RedoAvailableFlag,
+      // but we can't make the AddItem flags and mask have both, because they'd both have to be true for the
+      // command to be enabled.
+      //    If user has Undone the entire stack, RedoAvailableFlag is on but UndoAvailableFlag is off.
+      //    If user has done things but not Undone anything, RedoAvailableFlag is off but UndoAvailableFlag is on.
+      // So in either of those cases, (AudioIONotBusyFlag | UndoAvailableFlag | RedoAvailableFlag) mask
+      // would fail.
+      // The only way to fix this in the current architecture is to hack in special cases for RedoAvailableFlag
+      // in AudacityProject::UpdateMenus() (ugly) and CommandManager::HandleCommandEntry() (*really* ugly --
+      // shouldn't know about particular command names and flags).
+      // Here's the hack that would be necessary in AudacityProject::UpdateMenus(), if somebody decides to do it:
+      //    // Because EnableUsingFlags requires all the flag bits match the corresponding mask bits,
+      //    // "UndoHistory" specifies only AudioIONotBusyFlag | UndoAvailableFlag, because that
+      //    // covers the majority of cases where it should be enabled.
+      //    // If history is not empty but we've Undone the whole stack, we also want to enable,
+      //    // to show the Redo's on stack.
+      //    // "UndoHistory" might already be enabled, but add this check for RedoAvailableFlag.
+      //    if (flags & RedoAvailableFlag)
+      //       mCommandManager.Enable(wxT("UndoHistory"), true);
+      // So for now, enable the command regardless of stack. It will just show empty sometimes.
+      // FOR REDESIGN, clearly there are some limitations with the flags/mask bitmaps.
 
-   /* i18n-hint: Clicking this menu item shows the various editing steps that have been taken.*/
-   c->AddItem(wxT("UndoHistory"), _("&History..."), FN(OnHistory),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
+      /* i18n-hint: Clicking this menu item shows the various editing steps that have been taken.*/
+      c->AddItem(wxT("UndoHistory"), _("&History..."), FN(OnHistory),
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   c->AddItem(wxT("Karaoke"), _("&Karaoke..."), FN(OnKaraoke), LabelTracksExistFlag, LabelTracksExistFlag);
-   c->AddItem(wxT("MixerBoard"), _("&Mixer Board..."), FN(OnMixerBoard), WaveTracksExistFlag, WaveTracksExistFlag);
+      c->AddItem(wxT("Karaoke"), _("&Karaoke..."), FN(OnKaraoke), LabelTracksExistFlag, LabelTracksExistFlag);
+      c->AddItem(wxT("MixerBoard"), _("&Mixer Board..."), FN(OnMixerBoard), WaveTracksExistFlag, WaveTracksExistFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("&Toolbars"));
+      c->BeginSubMenu(_("&Toolbars"));
 
-   /* i18n-hint: Clicking this menu item shows the toolbar that manages devices*/
-   c->AddCheck(wxT("ShowDeviceTB"), _("&Device Toolbar"), FN(OnShowDeviceToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar for editing*/
-   c->AddCheck(wxT("ShowEditTB"), _("&Edit Toolbar"), FN(OnShowEditToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar which has sound level meters*/
-   c->AddCheck(wxT("ShowMeterTB"), _("&Combined Meter Toolbar"), FN(OnShowMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar with the recording level meters*/
-   c->AddCheck(wxT("ShowRecordMeterTB"), _("&Recording Meter Toolbar"), FN(OnShowRecordMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar with the playback level meter*/
-   c->AddCheck(wxT("ShowPlayMeterTB"), _("&Playback Meter Toolbar"), FN(OnShowPlayMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar with the mixer*/
-   c->AddCheck(wxT("ShowMixerTB"), _("Mi&xer Toolbar"), FN(OnShowMixerToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar for selecting a time range of audio*/
-   c->AddCheck(wxT("ShowSelectionTB"), _("&Selection Toolbar"), FN(OnShowSelectionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar that manages devices*/
+      c->AddCheck(wxT("ShowDeviceTB"), _("&Device Toolbar"), FN(OnShowDeviceToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar for editing*/
+      c->AddCheck(wxT("ShowEditTB"), _("&Edit Toolbar"), FN(OnShowEditToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar which has sound level meters*/
+      c->AddCheck(wxT("ShowMeterTB"), _("Co&mbined Meter Toolbar"), FN(OnShowMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar with the recording level meters*/
+      c->AddCheck(wxT("ShowRecordMeterTB"), _("&Recording Meter Toolbar"), FN(OnShowRecordMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar with the playback level meter*/
+      c->AddCheck(wxT("ShowPlayMeterTB"), _("&Playback Meter Toolbar"), FN(OnShowPlayMeterToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar with the mixer*/
+      c->AddCheck(wxT("ShowMixerTB"), _("Mi&xer Toolbar"), FN(OnShowMixerToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar for selecting a time range of audio*/
+      c->AddCheck(wxT("ShowSelectionTB"), _("&Selection Toolbar"), FN(OnShowSelectionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
-   /* i18n-hint: Clicking this menu item shows the toolbar for selecting a frequency range of audio*/
-   c->AddCheck(wxT("ShowSpectralSelectionTB"), _("&Spectral Selection Toolbar"), FN(OnShowSpectralSelectionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar for selecting a frequency range of audio*/
+      c->AddCheck(wxT("ShowSpectralSelectionTB"), _("Spe&ctral Selection Toolbar"), FN(OnShowSpectralSelectionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
 #endif
-   /* i18n-hint: Clicking this menu item shows a toolbar that has some tools in it*/
-   c->AddCheck(wxT("ShowToolsTB"), _("T&ools Toolbar"), FN(OnShowToolsToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar for transcription (currently just vary play speed)*/
-   c->AddCheck(wxT("ShowTranscriptionTB"), _("Transcri&ption Toolbar"), FN(OnShowTranscriptionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
-   /* i18n-hint: Clicking this menu item shows the toolbar with the big buttons on it (play record etc)*/
-   c->AddCheck(wxT("ShowTransportTB"), _("&Transport Toolbar"), FN(OnShowTransportToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows a toolbar that has some tools in it*/
+      c->AddCheck(wxT("ShowToolsTB"), _("T&ools Toolbar"), FN(OnShowToolsToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar for transcription (currently just vary play speed)*/
+      c->AddCheck(wxT("ShowTranscriptionTB"), _("Tra&nscription Toolbar"), FN(OnShowTranscriptionToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar with the big buttons on it (play record etc)*/
+      c->AddCheck(wxT("ShowTransportTB"), _("&Transport Toolbar"), FN(OnShowTransportToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: Clicking this menu item shows the toolbar that enables Scrub or Seek playback and Scrub Ruler*/
+      c->AddCheck(wxT("ShowScrubbingTB"), _("Scru&b Toolbar"), FN(OnShowScrubbingToolBar), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("ResetToolbars"), _("&Reset Toolbars"), FN(OnResetToolBars), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("ResetToolbars"), _("Reset Toolb&ars"), FN(OnResetToolBars), 0, AlwaysEnabledFlag, AlwaysEnabledFlag);
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
-   // Transport Menu
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
+      // Transport Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   /*i18n-hint: 'Transport' is the name given to the set of controls that
-   play, record, pause etc. */
-   c->BeginMenu(_("T&ransport"));
-   c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
+      /*i18n-hint: 'Transport' is the name given to the set of controls that
+      play, record, pause etc. */
+      c->BeginMenu(_("T&ransport"));
+      c->SetDefaultFlags(CanStopAudioStreamFlag, CanStopAudioStreamFlag);
 
-   /* i18n-hint: (verb) Start or Stop audio playback*/
-   c->AddItem(wxT("PlayStop"), _("Pl&ay/Stop"), FN(OnPlayStop), wxT("Space"),
-              AlwaysEnabledFlag,
-              AlwaysEnabledFlag);
-   c->AddItem(wxT("PlayStopSelect"), _("Play/Stop and &Set Cursor"), FN(OnPlayStopSelect), wxT("Shift+A"),
-              AlwaysEnabledFlag,
-              AlwaysEnabledFlag);
-   c->AddItem(wxT("PlayLooped"), _("&Loop Play"), FN(OnPlayLooped), wxT("Shift+Space"),
-              WaveTracksExistFlag | AudioIONotBusyFlag,
-              WaveTracksExistFlag | AudioIONotBusyFlag);
-   c->AddItem(wxT("Pause"), _("&Pause"), FN(OnPause), wxT("P"),
-              AlwaysEnabledFlag,
-              AlwaysEnabledFlag);
-   c->AddItem(wxT("SkipStart"), _("S&kip to Start"), FN(OnSkipStart), wxT("Home"),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
-   c->AddItem(wxT("SkipEnd"), _("Skip to E&nd"), FN(OnSkipEnd), wxT("End"),
-              WaveTracksExistFlag | AudioIONotBusyFlag,
-              WaveTracksExistFlag | AudioIONotBusyFlag);
+      /* i18n-hint: (verb) Start or Stop audio playback*/
+      c->AddItem(wxT("PlayStop"), _("Pl&ay/Stop"), FN(OnPlayStop), wxT("Space"));
+      c->AddItem(wxT("PlayStopSelect"), _("Play/Stop and &Set Cursor"), FN(OnPlayStopSelect), wxT("Shift+A"));
+      c->AddItem(wxT("PlayLooped"), _("&Loop Play"), FN(OnPlayLooped), wxT("Shift+Space"),
+         WaveTracksExistFlag | AudioIONotBusyFlag | CanStopAudioStreamFlag,
+         WaveTracksExistFlag | AudioIONotBusyFlag | CanStopAudioStreamFlag);
 
-   c->AddSeparator();
+      // Scrubbing sub-menu
+      GetScrubber().AddMenuItems();
 
-   /* i18n-hint: (verb)*/
-   c->AddItem(wxT("Record"), _("&Record"), FN(OnRecord), wxT("R"));
-   c->AddItem(wxT("TimerRecord"), _("&Timer Record..."), FN(OnTimerRecord), wxT("Shift+T"));
-   c->AddItem(wxT("RecordAppend"), _("Appen&d Record"), FN(OnRecordAppend), wxT("Shift+R"));
+      c->AddItem(wxT("Pause"), _("&Pause"), FN(OnPause), wxT("P"));
+      c->AddItem(wxT("SkipStart"), _("S&kip to Start"), FN(OnSkipStart), wxT("Home"),
+                 AudioIONotBusyFlag, AudioIONotBusyFlag);
+      c->AddItem(wxT("SkipEnd"), _("Skip to E&nd"), FN(OnSkipEnd), wxT("End"),
+                 WaveTracksExistFlag | AudioIONotBusyFlag,
+                 WaveTracksExistFlag | AudioIONotBusyFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddCheck(wxT("Duplex"), _("&Overdub (on/off)"), FN(OnTogglePlayRecording), 0);
-   c->AddCheck(wxT("SWPlaythrough"), _("So&ftware Playthrough (on/off)"), FN(OnToggleSWPlaythrough), 0);
+      c->SetDefaultFlags(AudioIONotBusyFlag | CanStopAudioStreamFlag,
+                         AudioIONotBusyFlag | CanStopAudioStreamFlag);
+      /* i18n-hint: (verb)*/
+      c->AddItem(wxT("Record"), _("&Record"), FN(OnRecord), wxT("R"));
+      c->AddItem(wxT("TimerRecord"), _("&Timer Record..."), FN(OnTimerRecord), wxT("Shift+T"));
+      c->AddItem(wxT("RecordAppend"), _("Appen&d Record"), FN(OnRecordAppend), wxT("Shift+R"));
 
-   // Sound Activated recording options
-   c->AddCheck(wxT("SoundActivation"), _("Sound A&ctivated Recording (on/off)"), FN(OnToggleSoundActivated), 0);
-   c->AddItem(wxT("SoundActivationLevel"), _("Sound Activation Le&vel..."), FN(OnSoundActivated));
+      c->AddSeparator();
+
+      c->AddCheck(wxT("PinnedHead"), _("Pinned Recording/Playback &Head"),
+                  FN(OnTogglePinnedHead), 0,
+                  // Switching of scrolling on and off is permitted even during transport
+                  AlwaysEnabledFlag, AlwaysEnabledFlag);
+
+      c->AddCheck(wxT("Duplex"), _("&Overdub (on/off)"), FN(OnTogglePlayRecording), 0);
+      c->AddCheck(wxT("SWPlaythrough"), _("So&ftware Playthrough (on/off)"), FN(OnToggleSWPlaythrough), 0);
+
+      // Sound Activated recording options
+      c->AddCheck(wxT("SoundActivation"), _("Sound A&ctivated Recording (on/off)"), FN(OnToggleSoundActivated), 0);
+      c->AddItem(wxT("SoundActivationLevel"), _("Sound Activation Le&vel..."), FN(OnSoundActivated));
 
 #ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
-   c->AddCheck(wxT("AutomatedInputLevelAdjustmentOnOff"), _("A&utomated Recording Level Adjustment (on/off)"), FN(OnToogleAutomatedInputLevelAdjustment), 0);
+      c->AddCheck(wxT("AutomatedInputLevelAdjustmentOnOff"), _("A&utomated Recording Level Adjustment (on/off)"), FN(OnToogleAutomatedInputLevelAdjustment), 0);
 #endif
-   c->AddItem(wxT("RescanDevices"), _("R&escan Audio Devices"), FN(OnRescanDevices));
+      c->AddItem(wxT("RescanDevices"), _("R&escan Audio Devices"), FN(OnRescanDevices));
 
-   c->EndMenu();
+      c->EndMenu();
 
-   //////////////////////////////////////////////////////////////////////////
-   // Tracks Menu (formerly Project Menu)
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
+      // Tracks Menu (formerly Project Menu)
+      //////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&Tracks"));
-   c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
+      c->BeginMenu(_("&Tracks"));
+      c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("Add &New"));
+      c->BeginSubMenu(_("Add &New"));
 
-   c->AddItem(wxT("NewMonoTrack"),  _("&Mono Track"), FN(OnNewWaveTrack), wxT("Ctrl+Shift+N"));
-   c->AddItem(wxT("NewStereoTrack"), _("&Stereo Track"), FN(OnNewStereoTrack));
-   c->AddItem(wxT("NewLabelTrack"),  _("&Label Track"), FN(OnNewLabelTrack));
-   c->AddItem(wxT("NewTimeTrack"),   _("&Time Track"), FN(OnNewTimeTrack));
+      c->AddItem(wxT("NewMonoTrack"), _("&Mono Track"), FN(OnNewWaveTrack), wxT("Ctrl+Shift+N"));
+      c->AddItem(wxT("NewStereoTrack"), _("&Stereo Track"), FN(OnNewStereoTrack));
+      c->AddItem(wxT("NewLabelTrack"), _("&Label Track"), FN(OnNewLabelTrack));
+      c->AddItem(wxT("NewTimeTrack"), _("&Time Track"), FN(OnNewTimeTrack));
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("Stereo to Mono"), _("Stereo Trac&k to Mono"), FN(OnStereoToMono),
-              AudioIONotBusyFlag | StereoRequiredFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | StereoRequiredFlag | WaveTracksSelectedFlag);
-   c->AddItem(wxT("MixAndRender"), _("Mi&x and Render"), FN(OnMixAndRender),
-              AudioIONotBusyFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | WaveTracksSelectedFlag);
-   c->AddItem(wxT("MixAndRenderToNewTrack"), _("Mix and Render to Ne&w Track"), FN(OnMixAndRenderToNewTrack), wxT("Ctrl+Shift+M"),
-                 AudioIONotBusyFlag | WaveTracksSelectedFlag,
-                 AudioIONotBusyFlag | WaveTracksSelectedFlag);
-   c->AddItem(wxT("Resample"), _("&Resample..."), FN(OnResample),
-              AudioIONotBusyFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | WaveTracksSelectedFlag);
+      {
+         // Stereo to Mono is an oddball command that is also subject to control by the
+         // plug-in manager, as if an effect.  Decide whether to show or hide it.
+         const PluginID ID = EffectManager::Get().GetEffectByIdentifier(wxT("StereoToMono"));
+         const PluginDescriptor *plug = PluginManager::Get().GetPlugin(ID);
+         if (plug && plug->IsEnabled())
+            c->AddItem(wxT("Stereo to Mono"), _("Stereo Trac&k to Mono"), FN(OnStereoToMono),
+            AudioIONotBusyFlag | StereoRequiredFlag | WaveTracksSelectedFlag,
+            AudioIONotBusyFlag | StereoRequiredFlag | WaveTracksSelectedFlag);
+      }
+      c->AddItem(wxT("MixAndRender"), _("Mi&x and Render"), FN(OnMixAndRender),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag);
+      c->AddItem(wxT("MixAndRenderToNewTrack"), _("Mix and Render to Ne&w Track"), FN(OnMixAndRenderToNewTrack), wxT("Ctrl+Shift+M"),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag);
+      c->AddItem(wxT("Resample"), _("&Resample..."), FN(OnResample),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("RemoveTracks"), _("Remo&ve Tracks"), FN(OnRemoveTracks),
-              AudioIONotBusyFlag | TracksSelectedFlag,
-              AudioIONotBusyFlag | TracksSelectedFlag);
+      c->AddItem(wxT("RemoveTracks"), _("Remo&ve Tracks"), FN(OnRemoveTracks),
+         AudioIONotBusyFlag | TracksSelectedFlag,
+         AudioIONotBusyFlag | TracksSelectedFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   c->AddItem(wxT("MuteAllTracks"), _("&Mute All Tracks"), FN(OnMuteAllTracks), wxT("Ctrl+U"));
-   c->AddItem(wxT("UnMuteAllTracks"), _("&Unmute All Tracks"), FN(OnUnMuteAllTracks), wxT("Ctrl+Shift+U"));
+      c->AddItem(wxT("MuteAllTracks"), _("&Mute All Tracks"), FN(OnMuteAllTracks), wxT("Ctrl+U"));
+      c->AddItem(wxT("UnMuteAllTracks"), _("&Unmute All Tracks"), FN(OnUnMuteAllTracks), wxT("Ctrl+Shift+U"));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   wxArrayString alignLabelsNoSync;
-   alignLabelsNoSync.Add(_("&Align End to End"));
-   alignLabelsNoSync.Add(_("Align &Together"));
+      wxArrayString alignLabelsNoSync;
+      alignLabelsNoSync.Add(_("&Align End to End"));
+      alignLabelsNoSync.Add(_("Align &Together"));
 
-   wxArrayString alignLabels;
-   alignLabels.Add(_("Start to &Zero"));
-   alignLabels.Add(_("Start to &Cursor/Selection Start"));
-   alignLabels.Add(_("Start to Selection &End"));
-   alignLabels.Add(_("End to Cu&rsor/Selection Start"));
-   alignLabels.Add(_("End to Selection En&d"));
-   mAlignLabelsCount = alignLabels.GetCount();
+      wxArrayString alignLabels;
+      alignLabels.Add(_("Start to &Zero"));
+      alignLabels.Add(_("Start to &Cursor/Selection Start"));
+      alignLabels.Add(_("Start to Selection &End"));
+      alignLabels.Add(_("End to Cu&rsor/Selection Start"));
+      alignLabels.Add(_("End to Selection En&d"));
+      mAlignLabelsCount = alignLabels.GetCount();
 
-   // Calling c->SetCommandFlags() after AddItemList for "Align" and "AlignMove"
-   // does not correctly set flags for submenus, so do it this way.
-   c->SetDefaultFlags(AudioIONotBusyFlag | TracksSelectedFlag,
-                      AudioIONotBusyFlag | TracksSelectedFlag);
+      // Calling c->SetCommandFlags() after AddItemList for "Align" and "AlignMove"
+      // does not correctly set flags for submenus, so do it this way.
+      c->SetDefaultFlags(AudioIONotBusyFlag | TracksSelectedFlag,
+         AudioIONotBusyFlag | TracksSelectedFlag);
 
-   c->BeginSubMenu(_("&Align Tracks"));
+      c->BeginSubMenu(_("&Align Tracks"));
 
-   c->AddItemList(wxT("Align"), alignLabelsNoSync, FN(OnAlignNoSync));
-   c->AddSeparator();
-   c->AddItemList(wxT("Align"), alignLabels, FN(OnAlign));
+      c->AddItemList(wxT("Align"), alignLabelsNoSync, FN(OnAlignNoSync));
+      c->AddSeparator();
+      c->AddItemList(wxT("Align"), alignLabels, FN(OnAlign));
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
-   // TODO: Can these labels be made clearer? Do we need this sub-menu at all?
-   c->BeginSubMenu(_("Move Sele&ction when Aligning"));
+      // TODO: Can these labels be made clearer? Do we need this sub-menu at all?
+      c->BeginSubMenu(_("Move Sele&ction when Aligning"));
 
-   c->AddItemList(wxT("AlignMove"), alignLabels, FN(OnAlignMoveSel));
-   c->SetCommandFlags(wxT("AlignMove"),
-                      AudioIONotBusyFlag | TracksSelectedFlag,
-                      AudioIONotBusyFlag | TracksSelectedFlag);
+      c->AddItemList(wxT("AlignMove"), alignLabels, FN(OnAlignMoveSel));
+      c->SetCommandFlags(wxT("AlignMove"),
+         AudioIONotBusyFlag | TracksSelectedFlag,
+         AudioIONotBusyFlag | TracksSelectedFlag);
 
-   c->EndSubMenu();
-   c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
+      c->EndSubMenu();
+      c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
 
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
 #ifdef EXPERIMENTAL_SCOREALIGN
-   c->AddItem(wxT("ScoreAlign"), _("Synchronize MIDI with Audio"), FN(OnScoreAlign),
-              AudioIONotBusyFlag | NoteTracksSelectedFlag | WaveTracksSelectedFlag,
-              AudioIONotBusyFlag | NoteTracksSelectedFlag | WaveTracksSelectedFlag);
+      c->AddItem(wxT("ScoreAlign"), _("Synchronize MIDI with Audio"), FN(OnScoreAlign),
+         AudioIONotBusyFlag | NoteTracksSelectedFlag | WaveTracksSelectedFlag,
+         AudioIONotBusyFlag | NoteTracksSelectedFlag | WaveTracksSelectedFlag);
 #endif // EXPERIMENTAL_SCOREALIGN
 
-   c->AddSeparator();
+      c->AddSeparator();
 
 #ifdef EXPERIMENTAL_SYNC_LOCK
-   c->AddCheck(wxT("SyncLock"), _("Sync-&Lock Tracks"), FN(OnSyncLock), 0,
-               AlwaysEnabledFlag, AlwaysEnabledFlag);
+      c->AddCheck(wxT("SyncLock"), _("Sync-&Lock Tracks"), FN(OnSyncLock), 0,
+         AlwaysEnabledFlag, AlwaysEnabledFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 #endif
 
-   c->AddItem(wxT("AddLabel"), _("Add Label At &Selection"), FN(OnAddLabel), wxT("Ctrl+B"),
-              AlwaysEnabledFlag, AlwaysEnabledFlag);
-   c->AddItem(wxT("AddLabelPlaying"), _("Add Label At &Playback Position"),
-              FN(OnAddLabelPlaying),
+      c->AddItem(wxT("AddLabel"), _("Add Label At &Selection"), FN(OnAddLabel), wxT("Ctrl+B"),
+         AlwaysEnabledFlag, AlwaysEnabledFlag);
+      c->AddItem(wxT("AddLabelPlaying"), _("Add Label At &Playback Position"),
+         FN(OnAddLabelPlaying),
 #ifdef __WXMAC__
-              wxT("Ctrl+."),
+         wxT("Ctrl+."),
 #else
-              wxT("Ctrl+M"),
+         wxT("Ctrl+M"),
 #endif
-              0, AudioIONotBusyFlag);
-   c->AddItem(wxT("EditLabels"), _("&Edit Labels..."), FN(OnEditLabels));
+         AudioIOBusyFlag, 
+         AudioIOBusyFlag);
+      c->AddItem(wxT("EditLabels"), _("&Edit Labels..."), FN(OnEditLabels));
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
-   c->BeginSubMenu(_("S&ort Tracks"));
+      c->BeginSubMenu(_("S&ort Tracks"));
 
-   c->AddItem(wxT("SortByTime"), _("by &Start time"), FN(OnSortTime),
-              TracksExistFlag,
-              TracksExistFlag);
-   c->AddItem(wxT("SortByName"), _("by &Name"), FN(OnSortName),
-              TracksExistFlag,
-              TracksExistFlag);
+      c->AddItem(wxT("SortByTime"), _("by &Start time"), FN(OnSortTime),
+         TracksExistFlag,
+         TracksExistFlag);
+      c->AddItem(wxT("SortByName"), _("by &Name"), FN(OnSortName),
+         TracksExistFlag,
+         TracksExistFlag);
 
-   c->EndSubMenu();
+      c->EndSubMenu();
 
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
 
-   c->EndMenu();
+      c->EndMenu();
 
-   // All of this is a bit hacky until we can get more things connected into
-   // the plugin manager...sorry! :-(
+      // All of this is a bit hacky until we can get more things connected into
+      // the plugin manager...sorry! :-(
 
-   wxArrayString defaults;
+      wxArrayString defaults;
 
-   //////////////////////////////////////////////////////////////////////////
-   // Generate Menu
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
+      // Generate Menu
+      //////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&Generate"));
-   c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
+      c->BeginMenu(_("&Generate"));
+      c->SetDefaultFlags(AudioIONotBusyFlag, AudioIONotBusyFlag);
 
 #ifdef EXPERIMENTAL_EFFECT_MANAGEMENT
-   c->AddItem(wxT("ManageGenerators"), _("Add / Remove Plug-ins..."), FN(OnManageGenerators));
-   c->AddSeparator();
+      c->AddItem(wxT("ManageGenerators"), _("Add / Remove Plug-ins..."), FN(OnManageGenerators));
+      c->AddSeparator();
 #endif
 
 
-   PopulateEffectsMenu(c,
-                       EffectTypeGenerate,
-                       AudioIONotBusyFlag,
-                       AudioIONotBusyFlag);
+      PopulateEffectsMenu(c,
+         EffectTypeGenerate,
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
-   // Effect Menu
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
+      // Effect Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("Effe&ct"));
+      c->BeginMenu(_("Effe&ct"));
 
-   wxString buildMenuLabel;
-   if (!mLastEffect.IsEmpty()) {
-      buildMenuLabel.Printf(_("Repeat %s"),
-                            EffectManager::Get().GetEffectName(mLastEffect).c_str());
-   }
-   else
-      buildMenuLabel.Printf(_("Repeat Last Effect"));
+      wxString buildMenuLabel;
+      if (!mLastEffect.IsEmpty()) {
+         buildMenuLabel.Printf(_("Repeat %s"),
+            EffectManager::Get().GetEffectName(mLastEffect).c_str());
+      }
+      else
+         buildMenuLabel.Printf(_("Repeat Last Effect"));
 
 #ifdef EXPERIMENTAL_EFFECT_MANAGEMENT
-   c->AddItem(wxT("ManageEffects"), _("Add / Remove Plug-ins..."), FN(OnManageEffects));
-   c->AddSeparator();
+      c->AddItem(wxT("ManageEffects"), _("Add / Remove Plug-ins..."), FN(OnManageEffects));
+      c->AddSeparator();
 #endif
 
-   c->AddItem(wxT("RepeatLastEffect"), buildMenuLabel, FN(OnRepeatLastEffect), wxT("Ctrl+R"),
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag | HasLastEffectFlag,
-              AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag | HasLastEffectFlag);
+      c->AddItem(wxT("RepeatLastEffect"), buildMenuLabel, FN(OnRepeatLastEffect), wxT("Ctrl+R"),
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag | HasLastEffectFlag,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag | HasLastEffectFlag);
 
-   c->AddSeparator();
+      c->AddSeparator();
 
-   PopulateEffectsMenu(c,
-                       EffectTypeProcess,
-                       AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-                       IsRealtimeNotActiveFlag);
+      PopulateEffectsMenu(c,
+         EffectTypeProcess,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         IsRealtimeNotActiveFlag);
 
-   c->EndMenu();
+      c->EndMenu();
 
-   //////////////////////////////////////////////////////////////////////////
-   // Analyze Menu
-   //////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////
+      // Analyze Menu
+      //////////////////////////////////////////////////////////////////////////
 
-   c->BeginMenu(_("&Analyze"));
+      c->BeginMenu(_("&Analyze"));
 
 #ifdef EXPERIMENTAL_EFFECT_MANAGEMENT
-   c->AddItem(wxT("ManageAnalyzers"), _("Add / Remove Plug-ins..."), FN(OnManageAnalyzers));
-   c->AddSeparator();
+      c->AddItem(wxT("ManageAnalyzers"), _("Add / Remove Plug-ins..."), FN(OnManageAnalyzers));
+      c->AddSeparator();
 #endif
 
 
-   c->AddItem(wxT("ContrastAnalyser"), _("Contrast..."), FN(OnContrast), wxT("Ctrl+Shift+T"),
-              AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag,
-              AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag);
-   c->AddItem(wxT("PlotSpectrum"), _("Plot Spectrum..."), FN(OnPlotSpectrum),
-              AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag,
-              AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag);
+      c->AddItem(wxT("ContrastAnalyser"), _("Contrast..."), FN(OnContrast), wxT("Ctrl+Shift+T"),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag);
+      c->AddItem(wxT("PlotSpectrum"), _("Plot Spectrum..."), FN(OnPlotSpectrum),
+         AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag,
+         AudioIONotBusyFlag | WaveTracksSelectedFlag | TimeSelectedFlag);
 
-   PopulateEffectsMenu(c,
-                       EffectTypeAnalyze,
-                       AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
-                       IsRealtimeNotActiveFlag);
+      PopulateEffectsMenu(c,
+         EffectTypeAnalyze,
+         AudioIONotBusyFlag | TimeSelectedFlag | WaveTracksSelectedFlag,
+         IsRealtimeNotActiveFlag);
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
-   // Help Menu
-   /////////////////////////////////////////////////////////////////////////////
+#ifdef __WXMAC__
+      /////////////////////////////////////////////////////////////////////////////
+      // poor imitation of the Mac Windows Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   #ifdef __WXMAC__
-   wxGetApp().s_macHelpMenuTitleName = _("&Help");
-   #endif
+      {
+      c->BeginMenu(_("&Window"));
+      /* i18n-hint: Standard Macintosh Window menu item:  Make (the current
+       * window) shrink to an icon on the dock */
+      c->AddItem(wxT("MacMinimize"), _("&Minimize"), FN(OnMacMinimize),
+                 wxT("Ctrl+M"), NotMinimizedFlag, NotMinimizedFlag);
+      /* i18n-hint: Standard Macintosh Window menu item:  Make (the current
+       * window) full sized */
+      c->AddItem(wxT("MacZoom"), _("&Zoom"), FN(OnMacZoom),
+                 wxT(""), NotMinimizedFlag, NotMinimizedFlag);
+      c->AddSeparator();
+      /* i18n-hint: Standard Macintosh Window menu item:  Make all project
+       * windows un-hidden */
+      c->AddItem(wxT("MacBringAllToFront"),
+                 _("&Bring All to Front"), FN(OnMacBringAllToFront),
+                 wxT(""), AlwaysEnabledFlag, AlwaysEnabledFlag);
+      c->EndMenu();
+      }
+#endif
 
-   c->BeginMenu(_("&Help"));
-   c->SetDefaultFlags(AlwaysEnabledFlag, AlwaysEnabledFlag);
+      /////////////////////////////////////////////////////////////////////////////
+      // Help Menu
+      /////////////////////////////////////////////////////////////////////////////
 
-   c->AddItem(wxT("QuickHelp"), _("&Quick Help"), FN(OnQuickHelp));
-   c->AddItem(wxT("Manual"), _("&Manual"), FN(OnManual));
+#ifdef __WXMAC__
+      wxGetApp().s_macHelpMenuTitleName = _("&Help");
+#endif
 
-   c->AddSeparator();
+      c->BeginMenu(_("&Help"));
+      c->SetDefaultFlags(AlwaysEnabledFlag, AlwaysEnabledFlag);
 
-   c->AddItem(wxT("Screenshot"), _("&Screenshot Tools..."), FN(OnScreenshot));
+      c->AddItem(wxT("QuickHelp"), _("&Quick Help"), FN(OnQuickHelp));
+      c->AddItem(wxT("Manual"), _("&Manual"), FN(OnManual));
+
+      c->AddSeparator();
+
+      c->AddItem(wxT("Screenshot"), _("&Screenshot Tools..."), FN(OnScreenshot));
 
 #if IS_ALPHA
-   // TODO: What should we do here?  Make benchmark a plug-in?
-   // Easy enough to do.  We'd call it mod-self-test.
+      // TODO: What should we do here?  Make benchmark a plug-in?
+      // Easy enough to do.  We'd call it mod-self-test.
 
-   c->AddItem(wxT("Benchmark"), _("&Run Benchmark..."), FN(OnBenchmark));
+      c->AddItem(wxT("Benchmark"), _("&Run Benchmark..."), FN(OnBenchmark));
 #endif
 
-   c->AddSeparator();
-   c->AddItem(wxT("Updates"), _("&Check for Updates..."), FN(OnCheckForUpdates));
-   c->AddItem(wxT("DeviceInfo"), _("Au&dio Device Info..."), FN(OnAudioDeviceInfo),
-              AudioIONotBusyFlag,
-              AudioIONotBusyFlag);
+      c->AddSeparator();
+      c->AddItem(wxT("Updates"), _("&Check for Updates..."), FN(OnCheckForUpdates));
+      c->AddItem(wxT("DeviceInfo"), _("Au&dio Device Info..."), FN(OnAudioDeviceInfo),
+         AudioIONotBusyFlag,
+         AudioIONotBusyFlag);
 
-   c->AddItem(wxT("Log"), _("Show &Log..."), FN(OnShowLog));
+      c->AddItem(wxT("Log"), _("Show &Log..."), FN(OnShowLog));
 
 #if defined(EXPERIMENTAL_CRASH_REPORT)
-   c->AddItem(wxT("CrashReport"), _("&Generate Support Data..."), FN(OnCrashReport));
+      c->AddItem(wxT("CrashReport"), _("&Generate Support Data..."), FN(OnCrashReport));
 #endif
 
 #ifndef __WXMAC__
-   c->AddSeparator();
+      c->AddSeparator();
 #endif
 
-   c->AddItem(wxT("About"), _("&About Audacity..."), FN(OnAbout));
+      c->AddItem(wxT("About"), _("&About Audacity..."), FN(OnAbout));
 
-   c->EndMenu();
+      c->EndMenu();
 
-   /////////////////////////////////////////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////////////
 
-   SetMenuBar(menubar);
+      SetMenuBar(menubar.release());
+   }
 
    c->AddGlobalCommand(wxT("PrevWindow"), _("Move backward thru active windows"), FN(PrevWindow), wxT("Alt+Shift+F6"));
    c->AddGlobalCommand(wxT("NextWindow"), _("Move forward thru active windows"), FN(NextWindow), wxT("Alt+F6"));
@@ -1170,6 +1173,8 @@ void AudacityProject::CreateMenusAndCommands()
 
    c->AddCommand(wxT("ShiftUp"), _("Move Focus to Previous and Select"), FN(OnShiftUp), wxT("Shift+Up"));
    c->AddCommand(wxT("ShiftDown"), _("Move Focus to Next and Select"), FN(OnShiftDown), wxT("Shift+Down"));
+
+
    c->AddCommand(wxT("Toggle"), _("Toggle Focused Track"), FN(OnToggle), wxT("Return"));
    c->AddCommand(wxT("ToggleAlt"), _("Toggle Focused Track"), FN(OnToggle), wxT("NUMPAD_ENTER"));
 
@@ -1246,7 +1251,14 @@ void AudacityProject::CreateMenusAndCommands()
    c->AddCommand(wxT("PlaySpeedInc"), _("Increase playback speed"), FN(OnPlaySpeedInc));
    c->AddCommand(wxT("PlaySpeedDec"), _("Decrease playback speed"), FN(OnPlaySpeedDec));
 
-   mLastFlags = 0;
+#ifdef __WXMAC__
+   /* i8n-hint: Shrink all project windows to icons on the Macintosh tooldock */
+   c->AddCommand(wxT("MacMinimizeAll"), _("Minimize all projects"),
+                 FN(OnMacMinimizeAll), wxT("Ctrl+Alt+M"),
+                 AlwaysEnabledFlag, AlwaysEnabledFlag);
+#endif
+
+   mLastFlags = AlwaysEnabledFlag;
 
 #if defined(__WXDEBUG__)
 //   c->CheckDups();
@@ -1255,8 +1267,8 @@ void AudacityProject::CreateMenusAndCommands()
 
 void AudacityProject::PopulateEffectsMenu(CommandManager* c,
                                           EffectType type,
-                                          int batchflags,
-                                          int realflags)
+                                          CommandFlag batchflags,
+                                          CommandFlag realflags)
 {
    PluginManager & pm = PluginManager::Get();
 
@@ -1327,8 +1339,8 @@ void AudacityProject::PopulateEffectsMenu(CommandManager* c,
 
 void AudacityProject::AddEffectMenuItems(CommandManager *c,
                                          EffectPlugs & plugs,
-                                         int batchflags,
-                                         int realflags,
+                                         CommandFlag batchflags,
+                                         CommandFlag realflags,
                                          bool isDefault)
 {
    size_t pluginCnt = plugs.GetCount();
@@ -1343,7 +1355,7 @@ void AudacityProject::AddEffectMenuItems(CommandManager *c,
 
    wxArrayString groupNames;
    PluginIDList groupPlugs;
-   wxArrayInt groupFlags;
+   std::vector<CommandFlag> groupFlags;
    if (grouped)
    {
       wxString last;
@@ -1393,13 +1405,13 @@ void AudacityProject::AddEffectMenuItems(CommandManager *c,
 
             groupNames.Clear();
             groupPlugs.Clear();
-            groupFlags.Clear();
+            groupFlags.clear();
             last = current;
          }
 
          groupNames.Add(name);
          groupPlugs.Add(plug->GetID());
-         groupFlags.Add(plug->IsEffectRealtime() ? realflags : batchflags);
+         groupFlags.push_back(plug->IsEffectRealtime() ? realflags : batchflags);
       }
 
       if (groupNames.GetCount() > 0)
@@ -1446,7 +1458,7 @@ void AudacityProject::AddEffectMenuItems(CommandManager *c,
 
          groupNames.Add(group + name);
          groupPlugs.Add(plug->GetID());
-         groupFlags.Add(plug->IsEffectRealtime() ? realflags : batchflags);
+         groupFlags.push_back(plug->IsEffectRealtime() ? realflags : batchflags);
       }
 
       if (groupNames.GetCount() > 0)
@@ -1462,7 +1474,7 @@ void AudacityProject::AddEffectMenuItems(CommandManager *c,
 void AudacityProject::AddEffectMenuItemGroup(CommandManager *c,
                                              const wxArrayString & names,
                                              const PluginIDList & plugs,
-                                             const wxArrayInt & flags,
+                                             const std::vector<CommandFlag> & flags,
                                              bool isDefault)
 {
    int namesCnt = (int) names.GetCount();
@@ -1508,7 +1520,7 @@ void AudacityProject::AddEffectMenuItemGroup(CommandManager *c,
          {
             end = groupCnt;
          }
-         c->BeginSubMenu(wxString::Format(_("Plug-ins %d to %d"),
+         c->BeginSubMenu(wxString::Format(_("Plug-in %d to %d"),
                                           groupNdx + 1,
                                           end));
       }
@@ -1577,10 +1589,10 @@ void AudacityProject::CreateRecentFilesMenu(CommandManager *c)
 void AudacityProject::ModifyUndoMenuItems()
 {
    wxString desc;
-   int cur = mUndoManager.GetCurrentState();
+   int cur = GetUndoManager()->GetCurrentState();
 
-   if (mUndoManager.UndoAvailable()) {
-      mUndoManager.GetShortDescription(cur, &desc);
+   if (GetUndoManager()->UndoAvailable()) {
+      GetUndoManager()->GetShortDescription(cur, &desc);
       mCommandManager.Modify(wxT("Undo"),
                              wxString::Format(_("&Undo %s"),
                                               desc.c_str()));
@@ -1590,8 +1602,8 @@ void AudacityProject::ModifyUndoMenuItems()
                              wxString::Format(_("&Undo")));
    }
 
-   if (mUndoManager.RedoAvailable()) {
-      mUndoManager.GetShortDescription(cur+1, &desc);
+   if (GetUndoManager()->RedoAvailable()) {
+      GetUndoManager()->GetShortDescription(cur+1, &desc);
       mCommandManager.Modify(wxT("Redo"),
                              wxString::Format(_("&Redo %s"),
                                               desc.c_str()));
@@ -1621,9 +1633,11 @@ void AudacityProject::RebuildMenuBar()
 
    // Delete the menus, since we will soon recreate them.
    // Rather oddly, the menus don't vanish as a result of doing this.
-   wxMenuBar *menuBar = GetMenuBar();
-   DetachMenuBar();
-   delete menuBar;
+   {
+      std::unique_ptr<wxMenuBar> menuBar{ GetMenuBar() };
+      DetachMenuBar();
+      // menuBar gets deleted here
+   }
 
    mCommandManager.PurgeData();
 
@@ -1639,7 +1653,7 @@ void AudacityProject::RebuildOtherMenus()
    }
 }
 
-int AudacityProject::GetFocusedFrame()
+CommandFlag AudacityProject::GetFocusedFrame()
 {
    wxWindow *w = FindFocus();
 
@@ -1647,6 +1661,9 @@ int AudacityProject::GetFocusedFrame()
       if (w == mToolManager->GetTopDock()) {
          return TopDockHasFocus;
       }
+
+      if (w == mRuler)
+         return RulerHasFocus;
 
       if (w == mTrackPanel) {
          return TrackPanelHasFocus;
@@ -1659,26 +1676,31 @@ int AudacityProject::GetFocusedFrame()
       w = w->GetParent();
    }
 
-   return 0;
+   return AlwaysEnabledFlag;
 }
 
-wxUint32 AudacityProject::GetUpdateFlags()
+CommandFlag AudacityProject::GetUpdateFlags()
 {
    // This method determines all of the flags that determine whether
    // certain menu items and commands should be enabled or disabled,
    // and returns them in a bitfield.  Note that if none of the flags
    // have changed, it's not necessary to even check for updates.
-   wxUint32 flags = 0;
+   auto flags = AlwaysEnabledFlag;
 
    if (!gAudioIO->IsAudioTokenActive(GetAudioIOToken()))
       flags |= AudioIONotBusyFlag;
    else
       flags |= AudioIOBusyFlag;
 
+   if( gAudioIO->IsPaused() )
+      flags |= PausedFlag;
+   else
+      flags |= NotPausedFlag;
+
    if (!mViewInfo.selectedRegion.isPoint())
       flags |= TimeSelectedFlag;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
    while (t) {
       flags |= TracksExistFlag;
@@ -1714,6 +1736,8 @@ wxUint32 AudacityProject::GetUpdateFlags()
                flags |= WaveTracksSelectedFlag;
             }
          }
+         if( t->GetEndTime() > t->GetStartTime() )
+            flags |= HasWaveDataFlag; 
       }
 #if defined(USE_MIDI)
       else if (t->GetKind() == Track::Note) {
@@ -1733,16 +1757,16 @@ wxUint32 AudacityProject::GetUpdateFlags()
    if((msClipT1 - msClipT0) > 0.0)
       flags |= ClipboardFlag;
 
-   if (mUndoManager.UnsavedChanges())
+   if (GetUndoManager()->UnsavedChanges())
       flags |= UnsavedChangesFlag;
 
    if (!mLastEffect.IsEmpty())
       flags |= HasLastEffectFlag;
 
-   if (mUndoManager.UndoAvailable())
+   if (GetUndoManager()->UndoAvailable())
       flags |= UndoAvailableFlag;
 
-   if (mUndoManager.RedoAvailable())
+   if (GetUndoManager()->RedoAvailable())
       flags |= RedoAvailableFlag;
 
    if (ZoomInAvailable() && (flags & TracksExistFlag))
@@ -1785,22 +1809,40 @@ wxUint32 AudacityProject::GetUpdateFlags()
       if (!mIsCapturing)
       flags |= CaptureNotBusyFlag;
 
+   ControlToolBar *bar = GetControlToolBar();
+   if (bar->ControlToolBar::CanStopAudioStream())
+      flags |= CanStopAudioStreamFlag;
+
+   if (auto focus = wxWindow::FindFocus()) {
+      while (focus && focus->GetParent())
+         focus = focus->GetParent();
+      if (focus && !static_cast<wxTopLevelWindow*>(focus)->IsIconized())
+         flags |= NotMinimizedFlag;
+   }
+
    return flags;
 }
 
 void AudacityProject::SelectAllIfNone()
 {
-   wxUint32 flags = GetUpdateFlags();
-   if(((flags & TracksSelectedFlag) ==0) ||
+   auto flags = GetUpdateFlags();
+   if(!(flags & TracksSelectedFlag) ||
       (mViewInfo.selectedRegion.isPoint()))
       OnSelectAll();
+}
+
+void AudacityProject::StopIfPaused()
+{
+   auto flags = GetUpdateFlags();
+   if( flags & PausedFlag )
+      OnStop();
 }
 
 void AudacityProject::ModifyAllProjectToolbarMenus()
 {
    AProjectArray::iterator i;
    for (i = gAudacityProjects.begin(); i != gAudacityProjects.end(); ++i) {
-      ((AudacityProject *)*i)->ModifyToolbarMenus();
+      (*i)->ModifyToolbarMenus();
    }
 }
 
@@ -1812,6 +1854,8 @@ void AudacityProject::ModifyToolbarMenus()
       return;
    }
 
+   mCommandManager.Check(wxT("ShowScrubbingTB"),
+                         mToolManager->IsVisible(ScrubbingBarID));
    mCommandManager.Check(wxT("ShowDeviceTB"),
                          mToolManager->IsVisible(DeviceBarID));
    mCommandManager.Check(wxT("ShowEditTB"),
@@ -1851,6 +1895,10 @@ void AudacityProject::ModifyToolbarMenus()
    gPrefs->Read(wxT("/AudioIO/AutomatedInputLevelAdjustment"),&active, false);
    mCommandManager.Check(wxT("AutomatedInputLevelAdjustmentOnOff"), active);
 #endif
+
+   active = TracksPrefs::GetPinnedHeadPreference();
+   mCommandManager.Check(wxT("PinnedHead"), active);
+
    gPrefs->Read(wxT("/AudioIO/Duplex"),&active, true);
    mCommandManager.Check(wxT("Duplex"), active);
    gPrefs->Read(wxT("/AudioIO/SWPlaythrough"),&active, false);
@@ -1862,7 +1910,7 @@ void AudacityProject::ModifyToolbarMenus()
 
 // checkActive is a temporary hack that should be removed as soon as we
 // get multiple effect preview working
-void AudacityProject::UpdateMenus(bool checkActive)
+void AudacityProject::UpdateMenus(bool /*checkActive*/)
 {
    //ANSWER-ME: Why UpdateMenus only does active project?
    //JKC: Is this test fixing a bug when multiple projects are open?
@@ -1870,25 +1918,35 @@ void AudacityProject::UpdateMenus(bool checkActive)
    if (this != GetActiveProject())
       return;
 
-   if (checkActive && !IsActive())
-      return;
+   //if (checkActive && !IsActive())
+     // return;
 
-   wxUint32 flags = GetUpdateFlags();
-   wxUint32 flags2 = flags;
+   auto flags = GetUpdateFlags();
+   auto flags2 = flags;
 
    // We can enable some extra items if we have select-all-on-none.
    //EXPLAIN-ME: Why is this here rather than in GetUpdateFlags()?
+   //ANSWER: Because flags2 is used in the menu enable/disable.
+   //The effect still needs flags to determine whether it will need
+   //to actually do the 'select all' to make the command valid.
    if (mSelectAllOnNone)
    {
-      if ((flags & TracksExistFlag) != 0)
+      if ((flags & TracksExistFlag))
       {
          flags2 |= TracksSelectedFlag;
-         if ((flags & WaveTracksExistFlag) != 0 )
+         if ((flags & WaveTracksExistFlag))
          {
             flags2 |= TimeSelectedFlag
                    |  WaveTracksSelectedFlag
                    |  CutCopyAvailableFlag;
          }
+      }
+   }
+
+   if( mStopIfWasPaused )
+   {
+      if( flags & PausedFlag ){
+         flags2 |= AudioIONotBusyFlag;
       }
    }
 
@@ -1898,21 +1956,21 @@ void AudacityProject::UpdateMenus(bool checkActive)
       return;
    mLastFlags = flags;
 
-   mCommandManager.EnableUsingFlags(flags2 , 0xFFFFFFFF);
+   mCommandManager.EnableUsingFlags(flags2 , NoFlagsSpecifed);
 
    // With select-all-on-none, some items that we don't want enabled may have
    // been enabled, since we changed the flags.  Here we manually disable them.
    if (mSelectAllOnNone)
    {
-      if ((flags & TracksSelectedFlag) == 0)
+      if (!(flags & TracksSelectedFlag))
       {
          mCommandManager.Enable(wxT("SplitCut"), false);
 
-         if ((flags & WaveTracksSelectedFlag) == 0)
+         if (!(flags & WaveTracksSelectedFlag))
          {
             mCommandManager.Enable(wxT("Split"), false);
          }
-         if ((flags & TimeSelectedFlag) == 0)
+         if (!(flags & TimeSelectedFlag))
          {
             mCommandManager.Enable(wxT("ExportSel"), false);
             mCommandManager.Enable(wxT("SplitNew"), false);
@@ -2029,7 +2087,11 @@ bool AudacityProject::MakeReadyToPlay(bool loop, bool cutpreview)
    if (gAudioIO->IsBusy())
       return false;
 
-   toolbar->SetPlay(true, loop, cutpreview);
+   ControlToolBar::PlayAppearance appearance =
+      cutpreview ? ControlToolBar::PlayAppearance::CutPreview
+      : loop ? ControlToolBar::PlayAppearance::Looped
+      : ControlToolBar::PlayAppearance::Straight;
+   toolbar->SetPlay(true, appearance);
    toolbar->SetStop(false);
 
    return true;
@@ -2041,9 +2103,9 @@ void AudacityProject::OnPlayOneSecond()
       return;
 
    double pos = mTrackPanel->GetMostRecentXPos();
-   mLastPlayMode = oneSecondPlay;
    GetControlToolBar()->PlayPlayRegion
-      (SelectedRegion(pos - 0.5, pos + 0.5), GetDefaultPlayOptions());
+      (SelectedRegion(pos - 0.5, pos + 0.5), GetDefaultPlayOptions(),
+       PlayMode::oneSecondPlay);
 }
 
 
@@ -2080,14 +2142,13 @@ void AudacityProject::OnPlayToSelection()
    // where the cursor is.
    // TODO: have 'playing attributes' such as 'with_autoscroll'
    // rather than modes, since that's how we're now using the modes.
-   mLastPlayMode = oneSecondPlay;
 
    // An alternative, commented out below, is to disable autoscroll
    // only when playing a short region, less than or equal to a second.
 //   mLastPlayMode = ((t1-t0) > 1.0) ? normalPlay : oneSecondPlay;
 
    GetControlToolBar()->PlayPlayRegion
-      (SelectedRegion(t0, t1), GetDefaultPlayOptions());
+      (SelectedRegion(t0, t1), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 // The next 4 functions provide a limited version of the
@@ -2102,9 +2163,7 @@ void AudacityProject::OnPlayBeforeSelectionStart()
    double beforeLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewBeforeLen"), &beforeLen, 2.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
-   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t0), GetDefaultPlayOptions());
+   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t0), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 void AudacityProject::OnPlayAfterSelectionStart()
@@ -2117,12 +2176,11 @@ void AudacityProject::OnPlayAfterSelectionStart()
    double afterLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewAfterLen"), &afterLen, 1.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
    if ( t1 - t0 > 0.0 && t1 - t0 < afterLen )
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions(),
+                                          PlayMode::oneSecondPlay);
    else
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t0 + afterLen), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t0 + afterLen), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 void AudacityProject::OnPlayBeforeSelectionEnd()
@@ -2135,12 +2193,11 @@ void AudacityProject::OnPlayBeforeSelectionEnd()
    double beforeLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewBeforeLen"), &beforeLen, 2.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
    if ( t1 - t0 > 0.0 && t1 - t0 < beforeLen )
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions(),
+                                          PlayMode::oneSecondPlay);
    else
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1 - beforeLen, t1), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1 - beforeLen, t1), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 
@@ -2153,9 +2210,7 @@ void AudacityProject::OnPlayAfterSelectionEnd()
    double afterLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewAfterLen"), &afterLen, 1.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
-   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1, t1 + afterLen), GetDefaultPlayOptions());
+   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1, t1 + afterLen), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 void AudacityProject::OnPlayBeforeAndAfterSelectionStart()
@@ -2170,12 +2225,10 @@ void AudacityProject::OnPlayBeforeAndAfterSelectionStart()
    double afterLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewAfterLen"), &afterLen, 1.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
    if ( t1 - t0 > 0.0 && t1 - t0 < afterLen )
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t1), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t1), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
    else
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t0 + afterLen), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t0 + afterLen), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 void AudacityProject::OnPlayBeforeAndAfterSelectionEnd()
@@ -2190,12 +2243,10 @@ void AudacityProject::OnPlayBeforeAndAfterSelectionEnd()
    double afterLen;
    gPrefs->Read(wxT("/AudioIO/CutPreviewAfterLen"), &afterLen, 1.0);
 
-   mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
-
    if ( t1 - t0 > 0.0 && t1 - t0 < beforeLen )
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1 + afterLen), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1 + afterLen), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
    else
-      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1 - beforeLen, t1 + afterLen), GetDefaultPlayOptions());
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1 - beforeLen, t1 + afterLen), GetDefaultPlayOptions(), PlayMode::oneSecondPlay);
 }
 
 
@@ -2229,13 +2280,13 @@ void AudacityProject::OnPlayStop()
       toolbar->StopPlaying();
    }
    else if (gAudioIO->IsStreamActive()) {
-      //If this project isn't playing, but another one is, stop playing the old and start the new.
+      //If this project isn't playing, but another one is, stop playing the old and start the NEW.
 
       //find out which project we need;
       AudacityProject* otherProject = NULL;
-      for(unsigned i=0; i<gAudacityProjects.GetCount(); i++) {
+      for(unsigned i=0; i<gAudacityProjects.size(); i++) {
          if(gAudioIO->IsStreamActive(gAudacityProjects[i]->GetAudioIOToken())) {
-            otherProject=gAudacityProjects[i];
+            otherProject=gAudacityProjects[i].get();
             break;
          }
       }
@@ -2274,8 +2325,7 @@ void AudacityProject::OnStop()
 {
    wxCommandEvent evt;
 
-   if (gAudioIO->IsStreamActive())
-      GetControlToolBar()->OnStop(evt);
+   GetControlToolBar()->OnStop(evt);
 }
 
 void AudacityProject::OnPause()
@@ -2304,17 +2354,10 @@ void AudacityProject::OnRecordAppend()
 // The code for "OnPlayStopSelect" is simply the code of "OnPlayStop" and "OnStopSelect" merged.
 void AudacityProject::OnPlayStopSelect()
 {
-   wxCommandEvent evt;
    ControlToolBar *toolbar = GetControlToolBar();
-
-   //If busy, stop playing, make sure everything is unpaused.
-   if (gAudioIO->IsStreamActive(GetAudioIOToken())) {
-      toolbar->SetPlay(false);        //Pops
-      toolbar->SetStop(true);         //Pushes stop down
-      mViewInfo.selectedRegion.setT0(gAudioIO->GetStreamTime(), false);
-      ModifyState(false);           // without bWantsAutoSave
+   wxCommandEvent evt;
+   if (DoPlayStopSelect(false, false))
       toolbar->OnStop(evt);
-   }
    else if (!gAudioIO->IsBusy()) {
       //Otherwise, start playing (assuming audio I/O isn't busy)
       //toolbar->SetPlay(true); // Not needed as set in PlayPlayRegion()
@@ -2323,6 +2366,53 @@ void AudacityProject::OnPlayStopSelect()
       // Will automatically set mLastPlayMode
       toolbar->PlayCurrentRegion(false);
    }
+}
+
+bool AudacityProject::DoPlayStopSelect(bool click, bool shift)
+{
+   ControlToolBar *toolbar = GetControlToolBar();
+
+   //If busy, stop playing, make sure everything is unpaused.
+   if (GetScrubber().HasStartedScrubbing() ||
+       gAudioIO->IsStreamActive(GetAudioIOToken())) {
+      toolbar->SetPlay(false);        //Pops
+      toolbar->SetStop(true);         //Pushes stop down
+
+      // change the selection
+      auto time = gAudioIO->GetStreamTime();
+      auto &selection = mViewInfo.selectedRegion;
+      if (shift && click) {
+         // Change the region selection, as if by shift-click at the play head
+         auto t0 = selection.t0(), t1 = selection.t1();
+         if (time < t0)
+            // Grow selection
+            t0 = time;
+         else if (time > t1)
+            // Grow selection
+            t1 = time;
+         else {
+            // Shrink selection, changing the nearer boundary
+            if (fabs(t0 - time) < fabs(t1 - time))
+               t0 = time;
+            else
+               t1 = time;
+         }
+         selection.setTimes(t0, t1);
+      }
+      else if (click){
+         // avoid a point at negative time.
+         time = wxMax( time, 0 );
+         // Set a point selection, as if by a click at the play head
+         selection.setTimes(time, time);
+      } else
+         // How stop and set cursor always worked
+         // -- change t0, collapsing to point only if t1 was greater
+         selection.setT0(time, false);
+
+      ModifyState(false);           // without bWantsAutoSave
+      return true;
+   }
+   return false;
 }
 
 void AudacityProject::OnStopSelect()
@@ -2343,6 +2433,27 @@ void AudacityProject::OnToggleSoundActivated()
    gPrefs->Write(wxT("/AudioIO/SoundActivatedRecord"), !pause);
    gPrefs->Flush();
    ModifyAllProjectToolbarMenus();
+}
+
+void AudacityProject::OnTogglePinnedHead()
+{
+   bool value = !TracksPrefs::GetPinnedHeadPreference();
+   TracksPrefs::SetPinnedHeadPreference(value, true);
+   ModifyAllProjectToolbarMenus();
+
+   // Change what happens in case transport is in progress right now
+   auto ctb = GetActiveProject()->GetControlToolBar();
+   if (ctb)
+      ctb->StartScrollingIfPreferred();
+
+   auto ruler = GetRulerPanel();
+   if (ruler)
+      // Update button image
+      ruler->UpdateButtonStates();
+
+   auto &scrubber = GetScrubber();
+   if (scrubber.HasStartedScrubbing())
+      scrubber.SetScrollScrubbing(value);
 }
 
 void AudacityProject::OnTogglePlayRecording()
@@ -2374,7 +2485,7 @@ void AudacityProject::OnToogleAutomatedInputLevelAdjustment()
 }
 #endif
 
-double AudacityProject::GetTime(Track *t)
+double AudacityProject::GetTime(const Track *t)
 {
    double stime = 0.0;
 
@@ -2404,43 +2515,46 @@ double AudacityProject::GetTime(Track *t)
 //sort based on flags.  see Project.h for sort flags
 void AudacityProject::SortTracks(int flags)
 {
-   int ndx = 0;
+   size_t ndx = 0;
    int cmpValue;
-   wxArrayPtrVoid arr;
-   TrackListIterator iter(mTracks);
-   Track *track = iter.First();
+   std::vector<ListOfTracks::iterator> arr;
+   arr.reserve(mTracks->GetCount());
    bool lastTrackLinked = false;
    //sort by linked tracks. Assumes linked track follows owner in list.
-   while (track) {
+
+   // First find the permutation.
+   for (auto iter = mTracks->begin(), end = mTracks->end(); iter != end; ++iter) {
+      const auto &track = *iter;
       if(lastTrackLinked) {
          //insert after the last track since this track should be linked to it.
          ndx++;
       }
       else {
-         for (ndx = 0; ndx < (int)arr.GetCount(); ndx++) {
-            if(flags & kAudacitySortByName){
+         for (ndx = 0; ndx < arr.size(); ++ndx) {
+            Track &arrTrack = **arr[ndx];
+            if(flags & kAudacitySortByName) {
                //do case insensitive sort - cmpNoCase returns less than zero if the string is 'less than' its argument
                //also if we have case insensitive equality, then we need to sort by case as well
                //We sort 'b' before 'B' accordingly.  We uncharacteristically use greater than for the case sensitive
                //compare because 'b' is greater than 'B' in ascii.
-               cmpValue = track->GetName().CmpNoCase(((Track *) arr[ndx])->GetName());
+               cmpValue = track->GetName().CmpNoCase(arrTrack.GetName());
                if (cmpValue < 0 ||
-                   (0 == cmpValue && track->GetName().CompareTo(((Track *) arr[ndx])->GetName()) > 0) )
+                   (0 == cmpValue && track->GetName().CompareTo(arrTrack.GetName()) > 0) )
                   break;
             }
             //sort by time otherwise
-            else if(flags & kAudacitySortByTime){
+            else if(flags & kAudacitySortByTime) {
                //we have to search each track and all its linked ones to fine the minimum start time.
-               double time1,time2,tempTime;
-               Track* tempTrack;
-               int    candidatesLookedAt;
+               double time1, time2, tempTime;
+               const Track* tempTrack;
+               size_t candidatesLookedAt;
 
                candidatesLookedAt = 0;
-               tempTrack = track;
-               time1=time2=std::numeric_limits<double>::max(); //TODO: find max time value. (I don't think we have one yet)
-               while(tempTrack){
+               tempTrack = &*track;
+               time1 = time2 = std::numeric_limits<double>::max(); //TODO: find max time value. (I don't think we have one yet)
+               while(tempTrack) {
                   tempTime = GetTime(tempTrack);
-                  time1 = time1<tempTime? time1:tempTime;
+                  time1 = std::min(time1, tempTime);
                   if(tempTrack->GetLinked())
                      tempTrack = tempTrack->GetLink();
                   else
@@ -2448,13 +2562,13 @@ void AudacityProject::SortTracks(int flags)
                }
 
                //get candidate's (from sorted array) time
-               tempTrack = (Track *) arr[ndx];
-               while(tempTrack){
+               tempTrack = &arrTrack;
+               while(tempTrack) {
                   tempTime = GetTime(tempTrack);
-                  time2 = time2<tempTime? time2:tempTime;
-                  if(tempTrack->GetLinked() && (ndx+candidatesLookedAt <  (int)arr.GetCount()-1) ) {
+                  time2 = std::min(time2, tempTime);
+                  if(tempTrack->GetLinked() && (ndx+candidatesLookedAt < arr.size()-1) ) {
                      candidatesLookedAt++;
-                     tempTrack = (Track*) arr[ndx+candidatesLookedAt];
+                     tempTrack = &**arr[ndx+candidatesLookedAt];
                   }
                   else
                      tempTrack = NULL;
@@ -2467,15 +2581,13 @@ void AudacityProject::SortTracks(int flags)
             }
          }
       }
-      arr.Insert(track, ndx);
+      arr.insert(arr.begin() + ndx, iter);
 
       lastTrackLinked = track->GetLinked();
-      track = iter.RemoveCurrent();
    }
 
-   for (ndx = 0; ndx < (int)arr.GetCount(); ndx++) {
-      mTracks->Add((Track *)arr[ndx]);
-   }
+   // Now apply the permutation
+   mTracks->Permute(arr);
 }
 
 void AudacityProject::OnSortTime()
@@ -2705,52 +2817,78 @@ void AudacityProject::OnSetRightSelection()
    }
 }
 
+void AudacityProject::NextOrPrevFrame(bool forward)
+{
+   // Focus won't take in a dock unless at least one descendant window
+   // accepts focus.  Tell controls to take focus for the duration of this
+   // function, only.  Outside of this, they won't steal the focus when
+   // clicked.
+   auto temp1 = AButton::TemporarilyAllowFocus();
+   auto temp2 = ASlider::TemporarilyAllowFocus();
+   auto temp3 = Meter::TemporarilyAllowFocus();
+
+
+   // Define the set of windows we rotate among.
+   static const unsigned rotationSize = 3u;
+
+   wxWindow *const begin [rotationSize] = {
+      GetTopPanel(),
+      GetTrackPanel(),
+      mToolManager->GetBotDock(),
+   };
+   const auto end = begin + rotationSize;
+
+   // helper functions
+   auto IndexOf = [&](wxWindow *pWindow) {
+      return std::find(begin, end, pWindow) - begin;
+   };
+
+   auto FindAncestor = [&]() {
+      wxWindow *pWindow = wxWindow::FindFocus();
+      unsigned index = rotationSize;
+      while ( pWindow &&
+              (rotationSize == (index = IndexOf(pWindow) ) ) )
+         pWindow = pWindow->GetParent();
+      return index;
+   };
+
+   const auto idx = FindAncestor();
+   if (idx == rotationSize)
+      return;
+
+   auto idx2 = idx;
+   auto increment = (forward ? 1 : rotationSize - 1);
+
+   while( idx != (idx2 = (idx2 + increment) % rotationSize) ) {
+      wxWindow *toFocus = begin[idx2];
+      toFocus->SetFocus();
+      if ( FindAncestor() == idx2 )
+         // The focus took!
+         break;
+      // else, one of the tool docks might be empty because all bars were
+      // dragged off it.  Skip it and try another.
+   }
+}
+
 void AudacityProject::NextFrame()
 {
-   switch( GetFocusedFrame() )
-   {
-      case TopDockHasFocus:
-         mTrackPanel->SetFocus();
-      break;
-
-      case TrackPanelHasFocus:
-         mToolManager->GetBotDock()->SetFocus();
-      break;
-
-      case BotDockHasFocus:
-         mToolManager->GetTopDock()->SetFocus();
-      break;
-   }
+   NextOrPrevFrame(true);
 }
 
 void AudacityProject::PrevFrame()
 {
-   switch( GetFocusedFrame() )
-   {
-      case TopDockHasFocus:
-         mToolManager->GetBotDock()->SetFocus();
-      break;
-
-      case TrackPanelHasFocus:
-         mToolManager->GetTopDock()->SetFocus();
-      break;
-
-      case BotDockHasFocus:
-         mTrackPanel->SetFocus();
-      break;
-   }
+   NextOrPrevFrame(false);
 }
 
 void AudacityProject::NextWindow()
 {
    wxWindow *w = wxGetTopLevelParent(wxWindow::FindFocus());
-   const wxWindowList & list = GetChildren();
-   wxWindowList::compatibility_iterator iter;
+   const auto & list = GetChildren();
+   auto iter = list.begin(), end = list.end();
 
    // If the project window has the current focus, start the search with the first child
    if (w == this)
    {
-      iter = list.GetFirst();
    }
    // Otherwise start the search with the current window's next sibling
    else
@@ -2758,31 +2896,27 @@ void AudacityProject::NextWindow()
       // Find the window in this projects children.  If the window with the
       // focus isn't a child of this project (like when a dialog is created
       // without specifying a parent), then we'll get back NULL here.
-      iter = list.Find(w);
-      if (iter)
-      {
-         iter = iter->GetNext();
-      }
+      while (iter != end && *iter != w)
+         ++iter;
+      if (iter != end)
+         ++iter;
    }
 
    // Search for the next toplevel window
-   while (iter)
+   for (; iter != end; ++iter)
    {
       // If it's a toplevel, visible (we have hidden windows) and is enabled,
       // then we're done.  The IsEnabled() prevents us from moving away from 
       // a modal dialog because all other toplevel windows will be disabled.
-      w = iter->GetData();
+      w = *iter;
       if (w->IsTopLevel() && w->IsShown() && w->IsEnabled())
       {
          break;
       }
-
-      // Get the next sibling
-      iter = iter->GetNext();
    }
 
    // Ran out of siblings, so make the current project active
-   if (!iter && IsEnabled())
+   if ((iter == end) && IsEnabled())
    {
       w = this;
    }
@@ -2790,48 +2924,50 @@ void AudacityProject::NextWindow()
    // And make sure it's on top (only for floating windows...project window will not raise)
    // (Really only works on Windows)
    w->Raise();
+
+#ifdef __WXMAC__
+   // bug 868
+   // Simulate a TAB key press before continuing, else the cycle of
+   // navigation among top level windows stops because the keystrokes don't
+   // go to the CommandManager.
+   if (dynamic_cast<wxDialog*>(w)) {
+      w->NavigateIn();
+   }
+#endif
 }
 
 void AudacityProject::PrevWindow()
 {
    wxWindow *w = wxGetTopLevelParent(wxWindow::FindFocus());
-   const wxWindowList & list = GetChildren();
-   wxWindowList::compatibility_iterator iter;
+   const auto & list = GetChildren();
+   auto iter = list.rbegin(), end = list.rend();
 
    // If the project window has the current focus, start the search with the last child
    if (w == this)
    {
-      iter = list.GetLast();
    }
    // Otherwise start the search with the current window's previous sibling
    else
    {
-      if (list.Find(w))
-         iter = list.Find(w)->GetPrevious();
+      while (iter != end && *iter != w)
+         ++iter;
+      if (iter != end)
+         ++iter;
    }
 
    // Search for the previous toplevel window
-   while (iter)
+   for (; iter != end; ++iter)
    {
       // If it's a toplevel and is visible (we have come hidden windows), then we're done
-      w = iter->GetData();
-      if (w->IsTopLevel() && w->IsShown())
+      w = *iter;
+      if (w->IsTopLevel() && w->IsShown() && IsEnabled())
       {
          break;
-      }
-
-      // Find the window in this projects children.  If the window with the
-      // focus isn't a child of this project (like when a dialog is created
-      // without specifying a parent), then we'll get back NULL here.
-      iter = list.Find(w);
-      if (iter)
-      {
-         iter = iter->GetPrevious();
       }
    }
 
    // Ran out of siblings, so make the current project active
-   if (!iter && IsEnabled())
+   if ((iter == end) && IsEnabled())
    {
       w = this;
    }
@@ -2839,6 +2975,16 @@ void AudacityProject::PrevWindow()
    // And make sure it's on top (only for floating windows...project window will not raise)
    // (Really only works on Windows)
    w->Raise();
+
+#ifdef __WXMAC__
+   // bug 868
+   // Simulate a TAB key press before continuing, else the cycle of
+   // navigation among top level windows stops because the keystrokes don't
+   // go to the CommandManager.
+   if (dynamic_cast<wxDialog*>(w)) {
+      w->NavigateIn();
+   }
+#endif
 }
 
 //The following methods operate controls on specified tracks,
@@ -2849,11 +2995,11 @@ void AudacityProject::OnTrackPan()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider(wt);
    if (slider->ShowDialog()) {
-      SetTrackPan(track, slider);
+      SetTrackPan(wt, slider);
    }
 }
 
@@ -2863,11 +3009,11 @@ void AudacityProject::OnTrackPanLeft()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider(wt);
    slider->Decrease(1);
-   SetTrackPan(track, slider);
+   SetTrackPan(wt, slider);
 }
 
 void AudacityProject::OnTrackPanRight()
@@ -2876,11 +3022,11 @@ void AudacityProject::OnTrackPanRight()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->PanSlider(wt);
    slider->Increase(1);
-   SetTrackPan(track, slider);
+   SetTrackPan(wt, slider);
 }
 
 void AudacityProject::OnTrackGain()
@@ -2890,11 +3036,11 @@ void AudacityProject::OnTrackGain()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider(wt);
    if (slider->ShowDialog()) {
-      SetTrackGain(track, slider);
+      SetTrackGain(wt, slider);
    }
 }
 
@@ -2904,11 +3050,11 @@ void AudacityProject::OnTrackGainInc()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider(wt);
    slider->Increase(1);
-   SetTrackGain(track, slider);
+   SetTrackGain(wt, slider);
 }
 
 void AudacityProject::OnTrackGainDec()
@@ -2917,11 +3063,11 @@ void AudacityProject::OnTrackGainDec()
    if (!track || (track->GetKind() != Track::Wave)) {
       return;
    }
+   const auto wt = static_cast<WaveTrack*>(track);
 
-   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider
-      (static_cast<WaveTrack*>(track));
+   LWSlider *slider = mTrackPanel->GetTrackInfo()->GainSlider(wt);
    slider->Decrease(1);
-   SetTrackGain(track, slider);
+   SetTrackGain(wt, slider);
 }
 
 void AudacityProject::OnTrackMenu()
@@ -3203,7 +3349,7 @@ double AudacityProject::NearestZeroCrossing(double t0)
    for(i=0; i<windowSize; i++)
       dist[i] = 0.0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *track = iter.First();
    while (track) {
       if (!track->GetSelected() || track->GetKind() != (Track::Wave)) {
@@ -3213,7 +3359,7 @@ double AudacityProject::NearestZeroCrossing(double t0)
       WaveTrack *one = (WaveTrack *)track;
       int oneWindowSize = (int)(one->GetRate() / 100);
       float *oneDist = new float[oneWindowSize];
-      sampleCount s = one->TimeToLongSamples(t0);
+      auto s = one->TimeToLongSamples(t0);
       // fillTwo to ensure that missing values are treated as 2, and hence do not
       // get used as zero crossings.
       one->Get((samplePtr)oneDist, floatSample,
@@ -3293,12 +3439,14 @@ void AudacityProject::OnZeroCrossing()
 
 /// OnEffect() takes a PluginID and has the EffectManager execute the assocated effect.
 ///
-/// At the moment flags are used only to indicate whether to prompt for parameters and
-/// whether to save the state to history.
+/// At the moment flags are used only to indicate whether to prompt for parameters,
+/// whether to save the state to history and whether to allow 'Repeat Last Effect'.
 bool AudacityProject::OnEffect(const PluginID & ID, int flags)
 {
    const PluginDescriptor *plug = PluginManager::Get().GetPlugin(ID);
-   wxASSERT(plug != NULL);
+   if (!plug)
+      return false;
+
    EffectType type = plug->GetEffectType();
 
    // Make sure there's no activity since the effect is about to be applied
@@ -3312,9 +3460,9 @@ bool AudacityProject::OnEffect(const PluginID & ID, int flags)
 
    wxGetApp().SetMissingAliasedFileWarningShouldShow(true);
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
-   WaveTrack *newTrack = NULL;
+   WaveTrack *newTrack{};
    wxWindow *focus = wxWindow::FindFocus();
 
    //double prevEndTime = mTracks->GetEndTime();
@@ -3331,9 +3479,8 @@ bool AudacityProject::OnEffect(const PluginID & ID, int flags)
    if (count == 0) {
       // No tracks were selected...
       if (type == EffectTypeGenerate) {
-         // Create a new track for the generated audio...
-         newTrack = mTrackFactory->NewWaveTrack();
-         mTracks->Add(newTrack);
+         // Create a NEW track for the generated audio...
+         newTrack = static_cast<WaveTrack*>(mTracks->Add(mTrackFactory->NewWaveTrack()));
          newTrack->SetSelected(true);
       }
    }
@@ -3341,14 +3488,13 @@ bool AudacityProject::OnEffect(const PluginID & ID, int flags)
    EffectManager & em = EffectManager::Get();
 
    bool success = em.DoEffect(ID, this, mRate,
-                               mTracks, mTrackFactory, 
+                               GetTracks(), GetTrackFactory(),
                                &mViewInfo.selectedRegion,
                                (flags & OnEffectFlags::kConfigured) == 0);
 
    if (!success) {
       if (newTrack) {
          mTracks->Remove(newTrack);
-         delete newTrack;
          mTrackPanel->Refresh(false);
       }
 
@@ -3360,19 +3506,26 @@ bool AudacityProject::OnEffect(const PluginID & ID, int flags)
       return false;
    }
 
+   if (em.GetSkipStateFlag())
+      flags = flags | OnEffectFlags::kSkipState;
+
    if (!(flags & OnEffectFlags::kSkipState))
    {
       wxString shortDesc = em.GetEffectName(ID);
       wxString longDesc = em.GetEffectDescription(ID);
       PushState(longDesc, shortDesc);
+   }
 
+   if (!(flags & OnEffectFlags::kDontRepeatLast))
+   {
       // Only remember a successful effect, don't rmemeber insert,
       // or analyze effects.
       if (type == EffectTypeProcess) {
+         wxString shortDesc = em.GetEffectName(ID);
          mLastEffect = ID;
          wxString lastEffectDesc;
          /* i18n-hint: %s will be the name of the effect which will be
-            * repeated if this menu item is chosen */
+          * repeated if this menu item is chosen */
          lastEffectDesc.Printf(_("Repeat %s"), shortDesc.c_str());
          mCommandManager.Modify(wxT("RepeatLastEffect"), lastEffectDesc);
       }
@@ -3414,8 +3567,8 @@ void AudacityProject::OnManagePluginsMenu(EffectType type)
 {
    if (PluginManager::Get().ShowManager(this, type))
    {
-      for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
-         AudacityProject *p = gAudacityProjects[i];
+      for (size_t i = 0; i < gAudacityProjects.size(); i++) {
+         AudacityProject *p = gAudacityProjects[i].get();
 
          p->RebuildMenuBar();
 #if defined(__WXGTK__)
@@ -3507,7 +3660,7 @@ void AudacityProject::OnExportLabels()
    Track *t;
    int numLabelTracks = 0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    wxString fName = _("labels.txt");
    t = iter.First();
@@ -3575,7 +3728,7 @@ void AudacityProject::OnExportLabels()
 
 #ifdef USE_MIDI
 void AudacityProject::OnExportMIDI(){
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
    int numNoteTracksSelected = 0;
    NoteTrack *nt = NULL;
@@ -3695,8 +3848,8 @@ void AudacityProject::OnPreferences()
    // LL:  Moved from PrefsDialog since wxWidgets on OSX can't deal with
    //      rebuilding the menus while the PrefsDialog is still in the modal
    //      state.
-   for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
-      AudacityProject *p = gAudacityProjects[i];
+   for (size_t i = 0; i < gAudacityProjects.size(); i++) {
+      AudacityProject *p = gAudacityProjects[i].get();
 
       p->RebuildMenuBar();
       p->RebuildOtherMenus();
@@ -3720,7 +3873,7 @@ void AudacityProject::OnPageSetup()
 
 void AudacityProject::OnPrint()
 {
-   HandlePrint(this, GetName(), mTracks);
+   HandlePrint(this, GetName(), GetTracks());
 }
 
 //
@@ -3729,7 +3882,7 @@ void AudacityProject::OnPrint()
 
 void AudacityProject::OnUndo()
 {
-   if (!mUndoManager.UndoAvailable()) {
+   if (!GetUndoManager()->UndoAvailable()) {
       wxMessageBox(_("Nothing to undo"));
       return;
    }
@@ -3739,8 +3892,8 @@ void AudacityProject::OnUndo()
       return;
    }
 
-   TrackList *l = mUndoManager.Undo(&mViewInfo.selectedRegion);
-   PopState(l);
+   const UndoState &state = GetUndoManager()->Undo(&mViewInfo.selectedRegion);
+   PopState(state);
 
    mTrackPanel->SetFocusedTrack(NULL);
    mTrackPanel->EnsureVisible(mTrackPanel->GetFirstSelectedTrack());
@@ -3750,12 +3903,16 @@ void AudacityProject::OnUndo()
    if (mHistoryWindow)
       mHistoryWindow->UpdateDisplay();
 
+   if (mMixerBoard)
+      // Mixer board may need to change for selection state and pan/gain
+      mMixerBoard->Refresh();
+
    ModifyUndoMenuItems();
 }
 
 void AudacityProject::OnRedo()
 {
-   if (!mUndoManager.RedoAvailable()) {
+   if (!GetUndoManager()->RedoAvailable()) {
       wxMessageBox(_("Nothing to redo"));
       return;
    }
@@ -3764,8 +3921,8 @@ void AudacityProject::OnRedo()
       return;
    }
 
-   TrackList *l = mUndoManager.Redo(&mViewInfo.selectedRegion);
-   PopState(l);
+   const UndoState &state = GetUndoManager()->Redo(&mViewInfo.selectedRegion);
+   PopState(state);
 
    mTrackPanel->SetFocusedTrack(NULL);
    mTrackPanel->EnsureVisible(mTrackPanel->GetFirstSelectedTrack());
@@ -3775,14 +3932,17 @@ void AudacityProject::OnRedo()
    if (mHistoryWindow)
       mHistoryWindow->UpdateDisplay();
 
+   if (mMixerBoard)
+      // Mixer board may need to change for selection state and pan/gain
+      mMixerBoard->Refresh();
+
    ModifyUndoMenuItems();
 }
 
 void AudacityProject::OnCut()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *n = iter.First();
-   Track *dest;
 
    // This doesn't handle cutting labels, it handles
    // cutting the _text_ inside of labels, i.e. if you're
@@ -3804,22 +3964,22 @@ void AudacityProject::OnCut()
    n = iter.First();
    while (n) {
       if (n->GetSelected()) {
-         dest = NULL;
+         Track::Holder dest;
 #if defined(USE_MIDI)
          if (n->GetKind() == Track::Note)
             // Since portsmf has a built-in cut operator, we use that instead
-            n->Cut(mViewInfo.selectedRegion.t0(),
-                   mViewInfo.selectedRegion.t1(), &dest);
+            dest = n->Cut(mViewInfo.selectedRegion.t0(),
+                   mViewInfo.selectedRegion.t1());
          else
 #endif
-            n->Copy(mViewInfo.selectedRegion.t0(),
-                    mViewInfo.selectedRegion.t1(), &dest);
+            dest = n->Copy(mViewInfo.selectedRegion.t0(),
+                    mViewInfo.selectedRegion.t1());
 
          if (dest) {
             dest->SetChannel(n->GetChannel());
             dest->SetLinked(n->GetLinked());
             dest->SetName(n->GetName());
-            msClipboard->Add(dest);
+            msClipboard->Add(std::move(dest));
          }
       }
       n = iter.Next();
@@ -3869,23 +4029,23 @@ void AudacityProject::OnCut()
 
 void AudacityProject::OnSplitCut()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *n = iter.First();
-   Track *dest;
 
    ClearClipboard();
    while (n) {
       if (n->GetSelected()) {
-         dest = NULL;
+         Track::Holder dest;
          if (n->GetKind() == Track::Wave)
          {
-            ((WaveTrack*)n)->SplitCut(
+            dest = ((WaveTrack*)n)->SplitCut(
                mViewInfo.selectedRegion.t0(),
-               mViewInfo.selectedRegion.t1(), &dest);
-         } else
+               mViewInfo.selectedRegion.t1());
+         }
+         else
          {
-            n->Copy(mViewInfo.selectedRegion.t0(),
-                    mViewInfo.selectedRegion.t1(), &dest);
+            dest = n->Copy(mViewInfo.selectedRegion.t0(),
+                    mViewInfo.selectedRegion.t1());
             n->Silence(mViewInfo.selectedRegion.t0(),
                        mViewInfo.selectedRegion.t1());
          }
@@ -3893,7 +4053,7 @@ void AudacityProject::OnSplitCut()
             dest->SetChannel(n->GetChannel());
             dest->SetLinked(n->GetLinked());
             dest->SetName(n->GetName());
-            msClipboard->Add(dest);
+            msClipboard->Add(std::move(dest));
          }
       }
       n = iter.Next();
@@ -3912,10 +4072,9 @@ void AudacityProject::OnSplitCut()
 void AudacityProject::OnCopy()
 {
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *n = iter.First();
-   Track *dest;
 
    while (n) {
       if (n->GetSelected()) {
@@ -3933,14 +4092,13 @@ void AudacityProject::OnCopy()
    n = iter.First();
    while (n) {
       if (n->GetSelected()) {
-         dest = NULL;
-         n->Copy(mViewInfo.selectedRegion.t0(),
-                 mViewInfo.selectedRegion.t1(), &dest);
+         auto dest = n->Copy(mViewInfo.selectedRegion.t0(),
+                 mViewInfo.selectedRegion.t1());
          if (dest) {
             dest->SetChannel(n->GetChannel());
             dest->SetLinked(n->GetLinked());
             dest->SetName(n->GetName());
-            msClipboard->Add(dest);
+            msClipboard->Add(std::move(dest));
          }
       }
       n = iter.Next();
@@ -3960,7 +4118,7 @@ void AudacityProject::OnPaste()
    if (this->HandlePasteText())
       return;
 
-   // If nothing's selected, we just insert new tracks.
+   // If nothing's selected, we just insert NEW tracks.
    if (this->HandlePasteNothingSelected())
       return;
 
@@ -3968,17 +4126,17 @@ void AudacityProject::OnPaste()
    double t0 = mViewInfo.selectedRegion.t0();
    double t1 = mViewInfo.selectedRegion.t1();
 
-   TrackListIterator iter(mTracks);
-   TrackListIterator clipIter(msClipboard);
+   TrackListIterator iter(GetTracks());
+   TrackListIterator clipIter(msClipboard.get());
 
    Track *n = iter.First();
-   Track *c = clipIter.First();
+   const Track *c = clipIter.First();
    if (c == NULL)
       return;
-   Track *f = NULL;
-   Track *tmpSrc = NULL;
-   Track *tmpC = NULL;
-   Track *prev = NULL;
+   Track *ff = NULL;
+   const Track *tmpSrc = NULL;
+   const Track *tmpC = NULL;
+   const Track *prev = NULL;
 
    bool bAdvanceClipboard = true;
    bool bPastedSomething = false;
@@ -3987,8 +4145,9 @@ void AudacityProject::OnPaste()
    while (n && c) {
       if (n->GetSelected()) {
          bAdvanceClipboard = true;
-         if (tmpC) c = tmpC;
-         if (c->GetKind() != n->GetKind()){
+         if (tmpC)
+            c = tmpC;
+         if (c->GetKind() != n->GetKind()) {
             if (!bTrackTypeMismatch) {
                tmpSrc = prev;
                tmpC = c;
@@ -3998,7 +4157,7 @@ void AudacityProject::OnPaste()
             c = tmpSrc;
 
             // If the types still don't match...
-            while (c && c->GetKind() != n->GetKind()){
+            while (c && c->GetKind() != n->GetKind()) {
                prev = c;
                c = clipIter.Next();
             }
@@ -4006,7 +4165,7 @@ void AudacityProject::OnPaste()
 
          // Handle case where the first track in clipboard
          // is of different type than the first selected track
-         if (!c){
+         if (!c) {
             c = tmpC;
             while (n && (c->GetKind() != n->GetKind() || !n->GetSelected()))
             {
@@ -4016,13 +4175,14 @@ void AudacityProject::OnPaste()
                }
                n = iter.Next();
             }
-            if (!n) c = NULL;
+            if (!n)
+               c = NULL;
          }
 
          // The last possible case for cross-type pastes: triggered when we try to
          // paste 1+ tracks from one type into 1+ tracks of another type. If
          // there's a mix of types, this shouldn't run.
-         if (!c){
+         if (!c) {
             wxMessageBox(
                _("Pasting one type of track into another is not allowed."),
                _("Error"), wxICON_ERROR, this);
@@ -4041,11 +4201,12 @@ void AudacityProject::OnPaste()
             break;
          }
 
-         if (!f)
-            f = n;
+         if (!ff)
+            ff = n;
 
+         Maybe<WaveTrack::Locker> locker;
          if (msClipProject != this && c->GetKind() == Track::Wave)
-            ((WaveTrack *) c)->Lock();
+            locker.create(static_cast<const WaveTrack*>(c));
 
          if (c->GetKind() == Track::Wave && n && n->GetKind() == Track::Wave)
          {
@@ -4076,11 +4237,7 @@ void AudacityProject::OnPaste()
             n = iter.Next();
 
             if (n->GetKind() == Track::Wave) {
-               //printf("Checking to see if we need to pre-clear the track\n");
-               if (!((WaveTrack *) n)->IsEmpty(t0, t1)) {
-                  ((WaveTrack *) n)->Clear(t0, t1);
-               }
-               bPastedSomething |= ((WaveTrack *)n)->Paste(t0, c);
+               bPastedSomething |= ((WaveTrack *)n)->ClearAndPaste(t0, t1, c, true, true);
             }
             else
             {
@@ -4088,9 +4245,6 @@ void AudacityProject::OnPaste()
                bPastedSomething |= n->Paste(t0, c);
             }
          }
-
-         if (msClipProject != this && c->GetKind() == Track::Wave)
-            ((WaveTrack *) c)->Unlock();
 
          if (bAdvanceClipboard){
             prev = c;
@@ -4111,25 +4265,24 @@ void AudacityProject::OnPaste()
    // selected tracks.
    if ( n && !c )
    {
-      TrackListOfKindIterator clipWaveIter(Track::Wave, msClipboard);
+      TrackListOfKindIterator clipWaveIter(Track::Wave, msClipboard.get());
       c = clipWaveIter.Last();
 
-      while (n){
-         if (n->GetSelected() && n->GetKind()==Track::Wave){
-            if (c && c->GetKind() == Track::Wave){
+      while (n) {
+         if (n->GetSelected() && n->GetKind()==Track::Wave) {
+            if (c && c->GetKind() == Track::Wave) {
                bPastedSomething |=
                   ((WaveTrack *)n)->ClearAndPaste(t0, t1, (WaveTrack *)c, true, true);
-            }else{
-               WaveTrack *tmp;
-               tmp = mTrackFactory->NewWaveTrack( ((WaveTrack*)n)->GetSampleFormat(), ((WaveTrack*)n)->GetRate());
+            }
+            else {
+               auto tmp = mTrackFactory->NewWaveTrack( ((WaveTrack*)n)->GetSampleFormat(), ((WaveTrack*)n)->GetRate());
                bool bResult = tmp->InsertSilence(0.0, msClipT1 - msClipT0); // MJS: Is this correct?
                wxASSERT(bResult); // TO DO: Actually handle this.
+               wxUnusedVar(bResult);
                tmp->Flush();
 
                bPastedSomething |=
-                  ((WaveTrack *)n)->ClearAndPaste(t0, t1, tmp, true, true);
-
-               delete tmp;
+                  ((WaveTrack *)n)->ClearAndPaste(t0, t1, tmp.get(), true, true);
             }
          }
          else if (n->GetKind() == Track::Label && n->GetSelected())
@@ -4159,8 +4312,8 @@ void AudacityProject::OnPaste()
 
       RedrawProject();
 
-      if (f)
-         mTrackPanel->EnsureVisible(f);
+      if (ff)
+         mTrackPanel->EnsureVisible(ff);
    }
 }
 
@@ -4168,7 +4321,7 @@ void AudacityProject::OnPaste()
 // (This was formerly the first part of overly-long OnPaste.)
 bool AudacityProject::HandlePasteText()
 {
-   TrackListOfKindIterator iterLabelTrack(Track::Label, mTracks);
+   TrackListOfKindIterator iterLabelTrack(Track::Label, GetTracks());
    LabelTrack* pLabelTrack = (LabelTrack*)(iterLabelTrack.First());
    while (pLabelTrack)
    {
@@ -4183,7 +4336,7 @@ bool AudacityProject::HandlePasteText()
 
             // Make sure caret is in view
             int x;
-            if (pLabelTrack->CalcCursorX(this, &x)) {
+            if (pLabelTrack->CalcCursorX(&x)) {
                mTrackPanel->ScrollIntoView(x);
             }
 
@@ -4198,13 +4351,13 @@ bool AudacityProject::HandlePasteText()
 }
 
 // Return true if nothing selected, regardless of paste result.
-// If nothing was selected, create and paste into new tracks.
+// If nothing was selected, create and paste into NEW tracks.
 // (This was formerly the second part of overly-long OnPaste.)
 bool AudacityProject::HandlePasteNothingSelected()
 {
    // First check whether anything's selected.
    bool bAnySelected = false;
-   TrackListIterator iterTrack(mTracks);
+   TrackListIterator iterTrack(GetTracks());
    Track* pTrack = iterTrack.First();
    while (pTrack) {
       if (pTrack->GetSelected())
@@ -4219,16 +4372,17 @@ bool AudacityProject::HandlePasteNothingSelected()
       return false;
    else
    {
-      TrackListIterator iterClip(msClipboard);
+      TrackListIterator iterClip(msClipboard.get());
       Track* pClip = iterClip.First();
       if (!pClip)
          return true; // nothing to paste
 
-      Track* pNewTrack;
+      Track::Holder pNewTrack;
       Track* pFirstNewTrack = NULL;
       while (pClip) {
+         Maybe<WaveTrack::Locker> locker;
          if ((msClipProject != this) && (pClip->GetKind() == Track::Wave))
-            ((WaveTrack*)pClip)->Lock();
+            locker.create(static_cast<const WaveTrack*>(pClip));
 
          switch (pClip->GetKind()) {
          case Track::Wave:
@@ -4260,14 +4414,13 @@ bool AudacityProject::HandlePasteNothingSelected()
 
          bool bResult = pNewTrack->Paste(0.0, pClip);
          wxASSERT(bResult); // TO DO: Actually handle this.
-         mTracks->Add(pNewTrack);
-         pNewTrack->SetSelected(true);
-
-         if (msClipProject != this && pClip->GetKind() == Track::Wave)
-            ((WaveTrack *) pClip)->Unlock();
+         wxUnusedVar(bResult);
 
          if (!pFirstNewTrack)
-            pFirstNewTrack = pNewTrack;
+            pFirstNewTrack = pNewTrack.get();
+
+         pNewTrack->SetSelected(true);
+         mTracks->Add(std::move(pNewTrack));
 
          pClip = iterClip.Next();
       }
@@ -4296,19 +4449,19 @@ bool AudacityProject::HandlePasteNothingSelected()
 }
 
 
-// Creates a new label in each selected label track with text from the system
+// Creates a NEW label in each selected label track with text from the system
 // clipboard
 void AudacityProject::OnPasteNewLabel()
 {
    bool bPastedSomething = false;
 
-   SelectedTrackListOfKindIterator iter(Track::Label, mTracks);
+   SelectedTrackListOfKindIterator iter(Track::Label, GetTracks());
    Track *t = iter.First();
    if (!t)
    {
       // If there are no selected label tracks, try to choose the first label
       // track after some other selected track
-      TrackListIterator iter1(mTracks);
+      TrackListIterator iter1(GetTracks());
       for (Track *t1 = iter1.First(); t1; t1 = iter1.Next()) {
          if (t1->GetSelected()) {
             // Look for a label track
@@ -4324,8 +4477,7 @@ void AudacityProject::OnPasteNewLabel()
 
       // If no match found, add one
       if (!t) {
-         t = new LabelTrack(mDirManager);
-         mTracks->Add(t);
+         t = mTracks->Add(GetTrackFactory()->NewLabelTrack());
       }
 
       // Select this track so the loop picks it up
@@ -4342,7 +4494,7 @@ void AudacityProject::OnPasteNewLabel()
       if (plt)
          plt->Unselect();
 
-      // Add a new label, paste into it
+      // Add a NEW label, paste into it
       // Paul L:  copy whatever defines the selected region, not just times
       lt->AddLabel(mViewInfo.selectedRegion);
       if (lt->PasteSelectedText(mViewInfo.selectedRegion.t0(),
@@ -4386,7 +4538,7 @@ void AudacityProject::OnTrim()
    if (mViewInfo.selectedRegion.isPoint())
       return;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *n = iter.First();
 
    while (n) {
@@ -4427,7 +4579,7 @@ void AudacityProject::OnDelete()
 
 void AudacityProject::OnSplitDelete()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *n = iter.First();
 
@@ -4456,7 +4608,7 @@ void AudacityProject::OnSplitDelete()
 
 void AudacityProject::OnDisjoin()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *n = iter.First();
 
@@ -4481,7 +4633,7 @@ void AudacityProject::OnDisjoin()
 
 void AudacityProject::OnJoin()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *n = iter.First();
 
@@ -4506,7 +4658,7 @@ void AudacityProject::OnJoin()
 
 void AudacityProject::OnSilence()
 {
-   SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, GetTracks());
 
    for (Track *n = iter.First(); n; n = iter.Next())
       n->Silence(mViewInfo.selectedRegion.t0(), mViewInfo.selectedRegion.t1());
@@ -4522,20 +4674,19 @@ void AudacityProject::OnSilence()
 
 void AudacityProject::OnDuplicate()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *l = iter.Last();
    Track *n = iter.First();
 
    while (n) {
       if (n->GetSelected()) {
-         Track *dest = NULL;
-         n->Copy(mViewInfo.selectedRegion.t0(),
-                 mViewInfo.selectedRegion.t1(), &dest);
+         auto dest = n->Copy(mViewInfo.selectedRegion.t0(),
+                 mViewInfo.selectedRegion.t1());
          if (dest) {
             dest->Init(*n);
             dest->SetOffset(wxMax(mViewInfo.selectedRegion.t0(), n->GetOffset()));
-            mTracks->Add(dest);
+            mTracks->Add(std::move(dest));
          }
       }
 
@@ -4558,7 +4709,7 @@ void AudacityProject::OnCutLabels()
 
   // Because of grouping the copy may need to operate on different tracks than
   // the clear, so we do these actions separately.
-  EditClipboardByLabel( &WaveTrack::Copy );
+  EditClipboardByLabel( &WaveTrack::CopyNonconst );
 
   if( gPrefs->Read( wxT( "/GUI/EnableCutLines" ), ( long )0 ) )
      EditByLabel( &WaveTrack::ClearAndAddCutLine, true );
@@ -4601,7 +4752,7 @@ void AudacityProject::OnCopyLabels()
   if( mViewInfo.selectedRegion.isPoint() )
      return;
 
-  EditClipboardByLabel( &WaveTrack::Copy );
+  EditClipboardByLabel( &WaveTrack::CopyNonconst );
 
   msClipProject = this;
 
@@ -4638,9 +4789,9 @@ void AudacityProject::OnSplitDeleteLabels()
   EditByLabel( &WaveTrack::SplitDelete, false );
 
   PushState(
-  /* i18n-hint: (verb) Audacity has just done a special kind of delete on the labeled audio regions */
+  /* i18n-hint: (verb) Audacity has just done a special kind of DELETE on the labeled audio regions */
      _( "Split Deleted labeled audio regions" ),
-  /* i18n-hint: (verb) Do a special kind of delete on labeled audio regions*/
+  /* i18n-hint: (verb) Do a special kind of DELETE on labeled audio regions*/
      _( "Split Delete Labeled Audio" ) );
 
   RedrawProject();
@@ -4711,7 +4862,7 @@ void AudacityProject::OnDisjoinLabels()
 
 void AudacityProject::OnSplit()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    double sel0 = mViewInfo.selectedRegion.t0();
    double sel1 = mViewInfo.selectedRegion.t1();
@@ -4784,31 +4935,36 @@ void AudacityProject::OnSplit()
 
 void AudacityProject::OnSplitNew()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *l = iter.Last();
 
    for (Track *n = iter.First(); n; n = iter.Next()) {
       if (n->GetSelected()) {
-         Track *dest = NULL;
+         Track::Holder dest;
+         double newt0 = 0, newt1 = 0;
          double offset = n->GetOffset();
          if (n->GetKind() == Track::Wave) {
-            ((WaveTrack*)n)->SplitCut(mViewInfo.selectedRegion.t0(),
-                                      mViewInfo.selectedRegion.t1(), &dest);
+            const auto wt = static_cast<WaveTrack*>(n);
+            // Clips must be aligned to sample positions or the NEW clip will not fit in the gap where it came from
+            offset = wt->LongSamplesToTime(wt->TimeToLongSamples(offset));
+            newt0 = wt->LongSamplesToTime(wt->TimeToLongSamples(mViewInfo.selectedRegion.t0()));
+            newt1 = wt->LongSamplesToTime(wt->TimeToLongSamples(mViewInfo.selectedRegion.t1()));
+            dest = wt->SplitCut(newt0, newt1);
          }
 #if 0
          // LL:  For now, just skip all non-wave tracks since the other do not
          //      yet support proper splitting.
          else {
-            n->Cut(mViewInfo.selectedRegion.t0(),
-                   mViewInfo.selectedRegion.t1(), &dest);
+            dest = n->Cut(mViewInfo.selectedRegion.t0(),
+                   mViewInfo.selectedRegion.t1());
          }
 #endif
          if (dest) {
             dest->SetChannel(n->GetChannel());
             dest->SetLinked(n->GetLinked());
             dest->SetName(n->GetName());
-            dest->SetOffset(wxMax(mViewInfo.selectedRegion.t0(), offset));
-            mTracks->Add(dest);
+            dest->SetOffset(wxMax(newt0, offset));
+            mTracks->Add(std::move(dest));
          }
       }
 
@@ -4824,7 +4980,7 @@ void AudacityProject::OnSplitNew()
 
 void AudacityProject::OnSelectAll()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    Track *t = iter.First();
    while (t) {
@@ -4860,7 +5016,7 @@ void AudacityProject::DoNextPeakFrequency(bool up)
 {
    // Find the first selected wave track that is in a spectrogram view.
    WaveTrack *pTrack = 0;
-   SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, GetTracks());
    for (Track *t = iter.First(); t; t = iter.Next()) {
       WaveTrack *const wt = static_cast<WaveTrack*>(t);
       const int display = wt->GetDisplay();
@@ -4893,7 +5049,7 @@ void AudacityProject::OnSelectCursorEnd()
 {
    double maxEndOffset = -1000000.0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t) {
@@ -4916,7 +5072,7 @@ void AudacityProject::OnSelectStartCursor()
 {
    double minOffset = 1000000.0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t) {
@@ -4938,7 +5094,7 @@ void AudacityProject::OnSelectStartCursor()
 void AudacityProject::OnSelectSyncLockSel()
 {
    bool selected = false;
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    for (Track *t = iter.First(); t; t = iter.Next())
    {
       if (t->IsSyncLockSelected()) {
@@ -4957,7 +5113,7 @@ void AudacityProject::OnSelectSyncLockSel()
 
 void AudacityProject::OnSelectAllTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    for (Track *t = iter.First(); t; t = iter.Next()) {
       t->SetSelected(true);
    }
@@ -5134,7 +5290,7 @@ void AudacityProject::DoZoomFitV()
    height -= 28;
 
    count = 0;
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
    while (t) {
       if ((t->GetKind() == Track::Wave) &&
@@ -5154,7 +5310,7 @@ void AudacityProject::DoZoomFitV()
    if (height < 40)
       height = 40;
 
-   TrackListIterator iter2(mTracks);
+   TrackListIterator iter2(GetTracks());
    t = iter2.First();
    while (t) {
       if ((t->GetKind() == Track::Wave) &&
@@ -5227,7 +5383,7 @@ void AudacityProject::OnShowClipping()
 void AudacityProject::OnHistory()
 {
    if (!mHistoryWindow)
-      mHistoryWindow = new HistoryWindow(this, &mUndoManager);
+      mHistoryWindow = safenew HistoryWindow(this, GetUndoManager());
    mHistoryWindow->Show();
    mHistoryWindow->Raise();
    mHistoryWindow->UpdateDisplay();
@@ -5236,7 +5392,7 @@ void AudacityProject::OnHistory()
 void AudacityProject::OnKaraoke()
 {
    if (!mLyricsWindow)
-      mLyricsWindow = new LyricsWindow(this);
+      mLyricsWindow = safenew LyricsWindow(this);
    mLyricsWindow->Show();
    UpdateLyrics();
    mLyricsWindow->Raise();
@@ -5246,7 +5402,7 @@ void AudacityProject::OnMixerBoard()
 {
    if (!mMixerBoardFrame)
    {
-      mMixerBoardFrame = new MixerBoardFrame(this);
+      mMixerBoardFrame = safenew MixerBoardFrame(this);
       mMixerBoard = mMixerBoardFrame->mMixerBoard;
    }
    mMixerBoardFrame->Show();
@@ -5262,7 +5418,7 @@ void AudacityProject::OnPlotSpectrum()
       where.x = 150;
       where.y = 150;
 
-      mFreqWindow = new FreqWindow(this, -1, _("Frequency Analysis"), where);
+      mFreqWindow = safenew FreqWindow(this, -1, _("Frequency Analysis"), where);
    }
 
    mFreqWindow->Show(true);
@@ -5276,26 +5432,10 @@ void AudacityProject::OnContrast()
    if(!mContrastDialog)
    {
       wxPoint where;
-
       where.x = 150;
       where.y = 150;
 
-      mContrastDialog = new ContrastDialog(this, -1, _("Contrast Analysis (WCAG 2 compliance)"), where);
-
-      mContrastDialog->bFGset = false;
-      mContrastDialog->bBGset = false;
-   }
-
-   // Zero dialog boxes.  Do we need to do this here?
-   if( !mContrastDialog->bFGset )
-   {
-      mContrastDialog->mForegroundStartT->SetValue(0.0);
-      mContrastDialog->mForegroundEndT->SetValue(0.0);
-   }
-   if( !mContrastDialog->bBGset )
-   {
-      mContrastDialog->mBackgroundStartT->SetValue(0.0);
-      mContrastDialog->mBackgroundEndT->SetValue(0.0);
+      mContrastDialog = safenew ContrastDialog(this, -1, _("Contrast Analysis (WCAG 2 compliance)"), where);
    }
 
    mContrastDialog->CentreOnParent();
@@ -5358,6 +5498,12 @@ void AudacityProject::OnShowMixerToolBar()
    ModifyToolbarMenus();
 }
 
+void AudacityProject::OnShowScrubbingToolBar()
+{
+   mToolManager->ShowHide( ScrubbingBarID );
+   ModifyToolbarMenus();
+}
+
 void AudacityProject::OnShowSelectionToolBar()
 {
    mToolManager->ShowHide( SelectionBarID );
@@ -5412,7 +5558,7 @@ void AudacityProject::OnImport()
    //sort selected files by OD status.  Load non OD first so user can edit asap.
    //first sort selectedFiles.
    selectedFiles.Sort(CompareNoCaseFileName);
-   ODManager::Pause();
+   ODManager::Pauser pauser;
 
    for (size_t ff = 0; ff < selectedFiles.GetCount(); ff++) {
       wxString fileName = selectedFiles[ff];
@@ -5427,8 +5573,7 @@ void AudacityProject::OnImport()
 
    gPrefs->Flush();
 
-   HandleResize(); // Adjust scrollers for new track sizes.
-   ODManager::Resume();
+   HandleResize(); // Adjust scrollers for NEW track sizes.
 }
 
 void AudacityProject::OnImportLabels()
@@ -5457,7 +5602,7 @@ void AudacityProject::OnImportLabels()
          return;
       }
 
-      LabelTrack *newTrack = new LabelTrack(mDirManager);
+      auto newTrack = GetTrackFactory()->NewLabelTrack();
       wxString sTrackName;
       wxFileName::SplitPath(fileName, NULL, NULL, &sTrackName, NULL);
       newTrack->SetName(sTrackName);
@@ -5465,8 +5610,8 @@ void AudacityProject::OnImportLabels()
       newTrack->Import(f);
 
       SelectNone();
-      mTracks->Add(newTrack);
       newTrack->SetSelected(true);
+      mTracks->Add(std::move(newTrack));
 
       PushState(wxString::
                 Format(_("Imported labels from '%s'"), fileName.c_str()),
@@ -5494,20 +5639,25 @@ void AudacityProject::OnImportMIDI()
       gPrefs->Write(wxT("/DefaultOpenPath"), path);
       gPrefs->Flush();
 
-      NoteTrack *newTrack = new NoteTrack(mDirManager);
+      DoImportMIDI(fileName);
+   }
+}
 
-      if (::ImportMIDI(fileName, newTrack)) {
+void AudacityProject::DoImportMIDI(const wxString &fileName)
+{
+   auto newTrack = GetTrackFactory()->NewNoteTrack();
 
-         SelectNone();
-         mTracks->Add(newTrack);
-         newTrack->SetSelected(true);
+   if (::ImportMIDI(fileName, newTrack.get())) {
 
-         PushState(wxString::Format(_("Imported MIDI from '%s'"),
-                                    fileName.c_str()), _("Import MIDI"));
+      SelectNone();
+      auto pTrack = mTracks->Add(std::move(newTrack));
+      pTrack->SetSelected(true);
 
-         RedrawProject();
-         mTrackPanel->EnsureVisible(newTrack);
-      }
+      PushState(wxString::Format(_("Imported MIDI from '%s'"),
+         fileName.c_str()), _("Import MIDI"));
+
+      RedrawProject();
+      mTrackPanel->EnsureVisible(pTrack);
    }
 }
 #endif // USE_MIDI
@@ -5532,37 +5682,52 @@ void AudacityProject::OnImportRaw()
    gPrefs->Write(wxT("/DefaultOpenPath"), path);
    gPrefs->Flush();
 
-   Track **newTracks;
-   int numTracks;
+   TrackHolders newTracks;
 
-   numTracks = ::ImportRaw(this, fileName, mTrackFactory, &newTracks);
+   ::ImportRaw(this, fileName, GetTrackFactory(), newTracks);
 
-   if (numTracks <= 0)
+   if (newTracks.size() <= 0)
       return;
 
-   AddImportedTracks(fileName, newTracks, numTracks);
-   HandleResize(); // Adjust scrollers for new track sizes.
+   AddImportedTracks(fileName, std::move(newTracks));
+   HandleResize(); // Adjust scrollers for NEW track sizes.
 }
 
 void AudacityProject::OnEditMetadata()
 {
-   if (mTags->ShowEditDialog(this, _("Edit Metadata Tags"), true))
-      PushState(_("Edit Metadata Tags"), _("Edit Metadata"));
+   (void)DoEditMetadata(_("Edit Metadata Tags"), _("Metadata Tags"), true);
+}
+
+bool AudacityProject::DoEditMetadata
+(const wxString &title, const wxString &shortUndoDescription, bool force)
+{
+   // Back up my tags
+   auto newTags = mTags->Duplicate();
+
+   if (newTags->ShowEditDialog(this, title, force)) {
+      if (*mTags != *newTags) {
+         // Commit the change to project state only now.
+         mTags = newTags;
+         PushState(title, shortUndoDescription);
+      }
+
+      return true;
+   }
+
+   return false;
 }
 
 void AudacityProject::HandleMixAndRender(bool toNewTrack)
 {
-   WaveTrack *newLeft = NULL;
-   WaveTrack *newRight = NULL;
-
    wxGetApp().SetMissingAliasedFileWarningShouldShow(true);
 
-   if (::MixAndRender(mTracks, mTrackFactory, mRate, mDefaultFormat, 0.0, 0.0,
-                      &newLeft, &newRight)) {
+   WaveTrack::Holder uNewLeft, uNewRight;
+   MixAndRender(GetTracks(), GetTrackFactory(), mRate, mDefaultFormat, 0.0, 0.0, uNewLeft, uNewRight);
 
+   if (uNewLeft) {
       // Remove originals, get stats on what tracks were mixed
 
-      TrackListIterator iter(mTracks);
+      TrackListIterator iter(GetTracks());
       Track *t = iter.First();
       int selectedCount = 0;
       wxString firstName;
@@ -5578,7 +5743,7 @@ void AudacityProject::HandleMixAndRender(bool toNewTrack)
                 selectedCount++;
 
                 if (!toNewTrack) {
-                   t = iter.RemoveCurrent(true);
+                   t = iter.RemoveCurrent();
                 } else {
                    t = iter.Next();
                 };
@@ -5587,17 +5752,18 @@ void AudacityProject::HandleMixAndRender(bool toNewTrack)
             t = iter.Next();
       }
 
-      // Add new tracks
+      // Add NEW tracks
 
-      mTracks->Add(newLeft);
-      if (newRight)
-         mTracks->Add(newRight);
+      auto pNewLeft = mTracks->Add(std::move(uNewLeft));
+      decltype(pNewLeft) pNewRight{};
+      if (uNewRight)
+         pNewRight = mTracks->Add(std::move(uNewRight));
 
       // If we're just rendering (not mixing), keep the track name the same
       if (selectedCount==1) {
-         newLeft->SetName(firstName);
-         if (newRight)
-            newRight->SetName(firstName);
+         pNewLeft->SetName(firstName);
+         if (pNewRight)
+            pNewRight->SetName(firstName);
       }
 
       // Smart history/undo message
@@ -5610,7 +5776,7 @@ void AudacityProject::HandleMixAndRender(bool toNewTrack)
       }
       else {
          wxString msg;
-         if (newRight)
+         if (pNewRight)
             msg.Printf(_("Mixed and rendered %d tracks into one new stereo track"),
                        selectedCount);
          else
@@ -5620,8 +5786,8 @@ void AudacityProject::HandleMixAndRender(bool toNewTrack)
       }
 
       mTrackPanel->SetFocus();
-      mTrackPanel->SetFocusedTrack(newLeft);
-      mTrackPanel->EnsureVisible(newLeft);
+      mTrackPanel->SetFocusedTrack(pNewLeft);
+      mTrackPanel->EnsureVisible(pNewLeft);
       RedrawProject();
    }
 }
@@ -5658,7 +5824,7 @@ void AudacityProject::OnCursorTrackStart()
 {
    double minOffset = 1000000.0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t) {
@@ -5682,7 +5848,7 @@ void AudacityProject::OnCursorTrackEnd()
    double maxEndOffset = -1000000.0;
    double thisEndOffset = 0.0;
 
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t) {
@@ -5719,11 +5885,11 @@ void AudacityProject::OnCursorSelEnd()
 
 void AudacityProject::HandleAlign(int index, bool moveSel)
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    wxString action;
    wxString shortAction;
    double offset;
-   double minOffset = 1000000000.0;
+   double minOffset = DBL_MAX;
    double maxEndOffset = 0.0;
    double leftOffset = 0.0;
    bool bRightChannel = false;
@@ -5813,7 +5979,7 @@ void AudacityProject::HandleAlign(int index, bool moveSel)
    }
 
    if ((unsigned)index >= mAlignLabelsCount) { // This is an alignLabelsNoSync command.
-      TrackListIterator iter(mTracks);
+      TrackListIterator iter(GetTracks());
       Track *t = iter.First();
       double leftChannelStart = 0.0;
       double leftChannelEnd = 0.0;
@@ -5870,7 +6036,7 @@ void AudacityProject::HandleAlign(int index, bool moveSel)
    }
 
    if (delta != 0.0) {
-      TrackListIterator iter(mTracks);
+      TrackListIterator iter(GetTracks());
       Track *t = iter.First();
 
       while (t) {
@@ -5929,14 +6095,14 @@ void AudacityProject::OnAlignMoveSel(int index)
 #define COLLECT_TIMING_DATA
 
 // Audacity Score Align Progress class -- progress reports come here
-class ASAProgress : public SAProgress {
+class ASAProgress final : public SAProgress {
  private:
    float mTotalWork;
    float mFrames[2];
    long mTotalCells; // how many matrix cells?
    long mCellCount; // how many cells so far?
    long mPrevCellCount; // cell_count last reported with Update()
-   ProgressDialog *mProgress;
+   Maybe<ProgressDialog> mProgress;
    #ifdef COLLECT_TIMING_DATA
       FILE *mTimeFile;
       wxDateTime mStartTime;
@@ -5946,18 +6112,16 @@ class ASAProgress : public SAProgress {
  public:
    ASAProgress() {
       smoothing = false;
-      mProgress = NULL;
       #ifdef COLLECT_TIMING_DATA
          mTimeFile = fopen("timing-data.txt", "w");
       #endif
    }
    ~ASAProgress() {
-      delete mProgress;
       #ifdef COLLECT_TIMING_DATA
          fclose(mTimeFile);
       #endif
    }
-   virtual void set_phase(int i) {
+   void set_phase(int i) override {
       float work[2]; // chromagram computation work estimates
       float work2, work3 = 0; // matrix and smoothing work estimates
       SAProgress::set_phase(i);
@@ -5999,7 +6163,7 @@ class ASAProgress : public SAProgress {
                     work[1], mFrames[1], is_audio[1]);
             fprintf(mTimeFile, "work2 = %g, work3 = %g\n", work2, work3);
          #endif
-         mProgress = new ProgressDialog(_("Synchronize MIDI with Audio"),
+         mProgress.create(_("Synchronize MIDI with Audio"),
                                _("Synchronizing MIDI and Audio Tracks"));
       } else if (i < 3) {
          fprintf(mTimeFile,
@@ -6015,7 +6179,7 @@ class ASAProgress : public SAProgress {
                 (ms * 0.001) / (wxMax(mFrames[0], mFrames[1]) * iterations));
       }
    }
-   virtual bool set_feature_progress(float s) {
+   bool set_feature_progress(float s) override {
       float work;
       if (phase == 0) {
          float f = s / frame_period;
@@ -6025,26 +6189,26 @@ class ASAProgress : public SAProgress {
          work = (is_audio[0] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * mFrames[0] +
                 (is_audio[1] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * f;
       }
-      int updateResult = mProgress->Update(int(work), int(mTotalWork));
+      int updateResult = mProgress->Update((int)(work), (int)(mTotalWork));
       return (updateResult == eProgressSuccess);
    }
-   virtual bool set_matrix_progress(int cells) {
+   bool set_matrix_progress(int cells) override {
       mCellCount += cells;
       float work =
              (is_audio[0] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * mFrames[0] +
              (is_audio[1] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * mFrames[1];
       work += mCellCount * MATRIX_WORK_UNIT;
-      int updateResult = mProgress->Update(int(work), int(mTotalWork));
+      int updateResult = mProgress->Update((int)(work), (int)(mTotalWork));
       return (updateResult == eProgressSuccess);
    }
-   virtual bool set_smoothing_progress(int i) {
+   bool set_smoothing_progress(int i) override {
       iterations = i;
       float work =
              (is_audio[0] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * mFrames[0] +
              (is_audio[1] ? AUDIO_WORK_UNIT : MIDI_WORK_UNIT) * mFrames[1] +
              MATRIX_WORK_UNIT * mFrames[0] * mFrames[1];
       work += i * wxMax(mFrames[0], mFrames[1]) * SMOOTHING_WORK_UNIT;
-      int updateResult = mProgress->Update(int(work), int(mTotalWork));
+      int updateResult = mProgress->Update((int)(work), (int)(mTotalWork));
       return (updateResult == eProgressSuccess);
    }
 };
@@ -6053,20 +6217,19 @@ class ASAProgress : public SAProgress {
 long mixer_process(void *mixer, float **buffer, long n)
 {
    Mixer *mix = (Mixer *) mixer;
-   long frame_count = mix->Process(n);
+   long frame_count = mix->Process(std::max(0L, n));
    *buffer = (float *) mix->GetBuffer();
    return frame_count;
 }
 
 void AudacityProject::OnScoreAlign()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
    int numWaveTracksSelected = 0;
    int numNoteTracksSelected = 0;
    int numOtherTracksSelected = 0;
    NoteTrack *nt;
-   NoteTrack *alignedNoteTrack;
    double endTime = 0.0;
 
    // Iterate through once to make sure that there is exactly
@@ -6096,7 +6259,10 @@ void AudacityProject::OnScoreAlign()
    // that it can be delted by CloseScoreAlignDialog() either here or
    // if the program is quit by the user while the dialog is up.
    ScoreAlignParams params;
-   ScoreAlignDialog *dlog = new ScoreAlignDialog(NULL, params);
+
+   // safe because the class maintains a global resource pointer
+   safenew ScoreAlignDialog(params);
+
    CloseScoreAlignDialog();
 
    if (params.mStatus != wxID_OK) return;
@@ -6105,14 +6271,14 @@ void AudacityProject::OnScoreAlign()
    //pushing the state before the change is wrong (I think)
    //PushState(_("Sync MIDI with Audio"), _("Sync MIDI with Audio"));
    // Make a copy of the note track in case alignment is canceled or fails
-   alignedNoteTrack = (NoteTrack *) nt->Duplicate();
+   auto holder = nt->Duplicate();
+   auto alignedNoteTrack = static_cast<NoteTrack*>(holder.get());
    // Duplicate() on note tracks serializes seq to a buffer, but we need
    // the seq, so Duplicate again and discard the track with buffer. The
    // test is here in case Duplicate() is changed in the future.
    if (alignedNoteTrack->GetSequence() == NULL) {
-      NoteTrack *temp = (NoteTrack *) alignedNoteTrack->Duplicate();
-      delete alignedNoteTrack;
-      alignedNoteTrack = temp;
+      holder = alignedNoteTrack->Duplicate();
+      alignedNoteTrack = static_cast<NoteTrack*>(holder.get());
       assert(alignedNoteTrack->GetSequence());
    }
    // Remove offset from NoteTrack because audio is
@@ -6125,45 +6291,43 @@ void AudacityProject::OnScoreAlign()
    }
    alignedNoteTrack->SetOffset(0);
 
-   WaveTrack **waveTracks;
-   mTracks->GetWaveTracks(true /* selectionOnly */,
-                          &numWaveTracksSelected, &waveTracks);
+   WaveTrackConstArray waveTracks =
+      mTracks->GetWaveTrackConstArray(true /* selectionOnly */);
 
-   Mixer *mix = new Mixer(numWaveTracksSelected,   // int numInputTracks
-                          waveTracks,              // WaveTrack **inputTracks
-                          mTracks->GetTimeTrack(), // TimeTrack *timeTrack
-                          0.0,                     // double startTime
-                          endTime,                 // double stopTime
-                          2,                       // int numOutChannels
-                          44100,                   // int outBufferSize
-                          true,                    // bool outInterleaved
-                          mRate,                   // double outRate
-                          floatSample,             // sampleFormat outFormat
-                          true,                    // bool highQuality = true
-                          NULL);                   // MixerSpec *mixerSpec = NULL
-   delete [] waveTracks;
+   int result;
+   {
+      Mixer mix(
+         waveTracks,              // const WaveTrackConstArray &inputTracks
+         Mixer::WarpOptions{ mTracks->GetTimeTrack() }, // const WarpOptions &warpOptions
+         0.0,                     // double startTime
+         endTime,                 // double stopTime
+         2,                       // int numOutChannels
+         44100u,                   // size_t outBufferSize
+         true,                    // bool outInterleaved
+         mRate,                   // double outRate
+         floatSample,             // sampleFormat outFormat
+         true,                    // bool highQuality = true
+         NULL);                   // MixerSpec *mixerSpec = NULL
 
-   ASAProgress *progress = new ASAProgress;
+      ASAProgress progress;
 
-   // There's a lot of adjusting made to incorporate the note track offset into
-   // the note track while preserving the position of notes within beats and
-   // measures. For debugging, you can see just the pre-scorealign note track
-   // manipulation by setting SKIP_ACTUAL_SCORE_ALIGNMENT. You could then, for
-   // example, save the modified note track in ".gro" form to read the details.
-   //#define SKIP_ACTUAL_SCORE_ALIGNMENT 1
+      // There's a lot of adjusting made to incorporate the note track offset into
+      // the note track while preserving the position of notes within beats and
+      // measures. For debugging, you can see just the pre-scorealign note track
+      // manipulation by setting SKIP_ACTUAL_SCORE_ALIGNMENT. You could then, for
+      // example, save the modified note track in ".gro" form to read the details.
+      //#define SKIP_ACTUAL_SCORE_ALIGNMENT 1
 #ifndef SKIP_ACTUAL_SCORE_ALIGNMENT
-   int result = scorealign((void *) mix, &mixer_process,
-                           2 /* channels */, 44100.0 /* srate */, endTime,
-                           alignedNoteTrack->GetSequence(), progress, params);
+      result = scorealign((void *) &mix, &mixer_process,
+         2 /* channels */, 44100.0 /* srate */, endTime,
+         alignedNoteTrack->GetSequence(), &progress, params);
 #else
-   int result = SA_SUCCESS;
+      result = SA_SUCCESS;
 #endif
-
-   delete progress;
-   delete mix;
+   }
 
    if (result == SA_SUCCESS) {
-      mTracks->Replace(nt, alignedNoteTrack, true);
+      mTracks->Replace(nt, std::move(holder));
       RedrawProject();
       wxMessageBox(wxString::Format(
          _("Alignment completed: MIDI from %.2f to %.2f secs, Audio from %.2f to %.2f secs."),
@@ -6171,7 +6335,6 @@ void AudacityProject::OnScoreAlign()
          params.mAudioStart, params.mAudioEnd));
       PushState(_("Sync MIDI with Audio"), _("Sync MIDI with Audio"));
    } else if (result == SA_TOOSHORT) {
-      delete alignedNoteTrack;
       wxMessageBox(wxString::Format(
          _("Alignment error: input too short: MIDI from %.2f to %.2f secs, Audio from %.2f to %.2f secs."),
          params.mMidiStart, params.mMidiEnd,
@@ -6179,11 +6342,9 @@ void AudacityProject::OnScoreAlign()
    } else if (result == SA_CANCEL) {
       // wrong way to recover...
       //GetActiveProject()->OnUndo(); // recover any changes to note track
-      delete alignedNoteTrack;
       return; // no message when user cancels alignment
    } else {
       //GetActiveProject()->OnUndo(); // recover any changes to note track
-      delete alignedNoteTrack;
       wxMessageBox(_("Internal error reported by alignment process."));
    }
 }
@@ -6192,10 +6353,9 @@ void AudacityProject::OnScoreAlign()
 
 void AudacityProject::OnNewWaveTrack()
 {
-   WaveTrack *t = mTrackFactory->NewWaveTrack(mDefaultFormat, mRate);
+   auto t = mTracks->Add(mTrackFactory->NewWaveTrack(mDefaultFormat, mRate));
    SelectNone();
 
-   mTracks->Add(t);
    t->SetSelected(true);
 
    PushState(_("Created new audio track"), _("New Track"));
@@ -6206,18 +6366,16 @@ void AudacityProject::OnNewWaveTrack()
 
 void AudacityProject::OnNewStereoTrack()
 {
-   WaveTrack *t = mTrackFactory->NewWaveTrack(mDefaultFormat, mRate);
+   auto t = mTracks->Add(mTrackFactory->NewWaveTrack(mDefaultFormat, mRate));
    t->SetChannel(Track::LeftChannel);
    SelectNone();
 
-   mTracks->Add(t);
    t->SetSelected(true);
    t->SetLinked (true);
 
-   t = mTrackFactory->NewWaveTrack(mDefaultFormat, mRate);
+   t = mTracks->Add(mTrackFactory->NewWaveTrack(mDefaultFormat, mRate));
    t->SetChannel(Track::RightChannel);
 
-   mTracks->Add(t);
    t->SetSelected(true);
 
    PushState(_("Created new stereo audio track"), _("New Track"));
@@ -6228,11 +6386,10 @@ void AudacityProject::OnNewStereoTrack()
 
 void AudacityProject::OnNewLabelTrack()
 {
-   LabelTrack *t = new LabelTrack(mDirManager);
+   auto t = mTracks->Add(GetTrackFactory()->NewLabelTrack());
 
    SelectNone();
 
-   mTracks->Add(t);
    t->SetSelected(true);
 
    PushState(_("Created new label track"), _("New Track"));
@@ -6248,11 +6405,10 @@ void AudacityProject::OnNewTimeTrack()
       return;
    }
 
-   TimeTrack *t = new TimeTrack(mDirManager);
+   auto t = mTracks->AddToHead(mTrackFactory->NewTimeTrack());
 
    SelectNone();
 
-   mTracks->AddToHead(t);
    t->SetSelected(true);
 
    PushState(_("Created new time track"), _("New Track"));
@@ -6263,24 +6419,78 @@ void AudacityProject::OnNewTimeTrack()
 
 void AudacityProject::OnTimerRecord()
 {
+   // MY: Due to improvements in how Timer Recording saves and/or exports
+   // it is now safer to disable Timer Recording when there is more than
+   // one open project.
+   if (GetOpenProjectCount() > 1) {
+      wxMessageBox(_("Timer Recording cannot be used with more than one open project.\n\nPlease close any additional projects and try again."),
+                   _("Timer Recording"),
+                   wxICON_INFORMATION | wxOK);
+      return;
+   }
+
+   // MY: If the project has unsaved changes then we no longer allow access
+   // to Timer Recording.  This decision has been taken as the safest approach
+   // preventing issues surrounding "dirty" projects when Automatic Save/Export
+   // is used in Timer Recording.
+   if ((GetUndoManager()->UnsavedChanges()) && (ProjectHasTracks() || mEmptyCanBeDirty)) {
+      wxMessageBox(_("Timer Recording cannot be used while you have unsaved changes.\n\nPlease save or close this project and try again."),
+                   _("Timer Recording"),
+                   wxICON_INFORMATION | wxOK);
+      return;
+   }
+   // We use this variable to display "Current Project" in the Timer Recording save project field
+   bool bProjectSaved = IsProjectSaved();
+
    //we break the prompting and waiting dialogs into two sections
    //because they both give the user a chance to click cancel
    //and therefore remove the newly inserted track.
 
-   TimerRecordDialog dialog(this /* parent */ );
+   TimerRecordDialog dialog(this, bProjectSaved); /* parent, project saved? */
    int modalResult = dialog.ShowModal();
    if (modalResult == wxID_CANCEL)
    {
       // Cancelled before recording - don't need to do anyting.
    }
-   else if(!dialog.RunWaitDialog())
+   else
    {
-      //RunWaitDialog() shows the "wait for start" as well as "recording" dialog
-      //if it returned false it means the user cancelled while the recording, so throw out the fresh track.
-      //However, we can't undo it here because the PushState() is called in TrackPanel::OnTimer(),
-      //which is blocked by this function.
-      //so instead we mark a flag to undo it there.
-      mTimerRecordCanceled = true;
+      int iTimerRecordingOutcome = dialog.RunWaitDialog();
+      switch (iTimerRecordingOutcome) {
+      case POST_TIMER_RECORD_CANCEL_WAIT:
+         // Canceled on the wait dialog
+         if (GetUndoManager()->UndoAvailable()) {
+            // MY: We need to roll back what changes we have made here
+            OnUndo();
+         }
+      break;
+      case POST_TIMER_RECORD_CANCEL:
+         // RunWaitDialog() shows the "wait for start" as well as "recording" dialog
+         // if it returned POST_TIMER_RECORD_CANCEL it means the user cancelled while the recording, so throw out the fresh track.
+         // However, we can't undo it here because the PushState() is called in TrackPanel::OnTimer(),
+         // which is blocked by this function.
+         // so instead we mark a flag to undo it there.
+         mTimerRecordCanceled = true;
+      break;
+      case POST_TIMER_RECORD_NOTHING:
+         // No action required
+      break;
+      case POST_TIMER_RECORD_CLOSE:
+         // Quit Audacity
+         exit(0);
+      break;
+      case POST_TIMER_RECORD_RESTART:
+         // Restart System
+#ifdef __WINDOWS__
+         system("shutdown /r /f /t 30");
+#endif
+      break;
+      case POST_TIMER_RECORD_SHUTDOWN:
+         // Shutdown System
+#ifdef __WINDOWS__
+         system("shutdown /s /f /t 30");
+#endif
+      break;
+      }
    }
 }
 
@@ -6295,19 +6505,20 @@ void AudacityProject::OnRescanDevices()
    DeviceManager::Instance()->Rescan();
 }
 
-int AudacityProject::DoAddLabel(const SelectedRegion &region)
+int AudacityProject::DoAddLabel(const SelectedRegion &region, bool preserveFocus)
 {
    LabelTrack *lt = NULL;
 
    // If the focused track is a label track, use that
-   Track *t = mTrackPanel->GetFocusedTrack();
+   Track *const pFocusedTrack = mTrackPanel->GetFocusedTrack();
+   Track *t = pFocusedTrack;
    if (t && t->GetKind() == Track::Label) {
       lt = (LabelTrack *) t;
    }
 
    // Otherwise look for a label track after the focused track
    if (!lt) {
-      TrackListIterator iter(mTracks);
+      TrackListIterator iter(GetTracks());
       if (t)
          iter.StartWith(t);
       else
@@ -6321,10 +6532,10 @@ int AudacityProject::DoAddLabel(const SelectedRegion &region)
       }
    }
 
-   // If none found, start a new label track and use it
+   // If none found, start a NEW label track and use it
    if (!lt) {
-      lt = new LabelTrack(mDirManager);
-      mTracks->Add(lt);
+      lt = static_cast<LabelTrack*>
+         (mTracks->Add(GetTrackFactory()->NewLabelTrack()));
    }
 
 // LLL: Commented as it seemed a little forceful to remove users
@@ -6335,7 +6546,23 @@ int AudacityProject::DoAddLabel(const SelectedRegion &region)
 //   SelectNone();
    lt->SetSelected(true);
 
-   int index = lt->AddLabel(region);
+   int focusTrackNumber = -1;
+   if (pFocusedTrack && preserveFocus) {
+      // Must remember the track to re-focus after finishing a label edit.
+      // do NOT identify it by a pointer, which might dangle!  Identify
+      // by position.
+      TrackListIterator iter(GetTracks());
+      Track *track = iter.First();
+      do
+         ++focusTrackNumber;
+      while (track != pFocusedTrack &&
+             NULL != (track = iter.Next()));
+      if (!track)
+         // How could we not find it?
+         focusTrackNumber = -1;
+   }
+
+   int index = lt->AddLabel(region, wxString(), focusTrackNumber);
 
    PushState(_("Added label"), _("Label"));
 
@@ -6369,20 +6596,29 @@ void AudacityProject::OnAddLabelPlaying()
    if (GetAudioIOToken()>0 &&
        gAudioIO->IsStreamActive(GetAudioIOToken())) {
       double indicator = gAudioIO->GetStreamTime();
-      DoAddLabel(SelectedRegion(indicator, indicator));
+      DoAddLabel(SelectedRegion(indicator, indicator), true);
    }
 }
 
-void AudacityProject::OnEditLabels()
+void AudacityProject::DoEditLabels(LabelTrack *lt, int index)
 {
-   wxString format = GetSelectionFormat();
+   wxString format = GetSelectionFormat(),
+      freqFormat = GetFrequencySelectionFormatName();
 
-   LabelDialog dlg(this, mDirManager, mTracks, mViewInfo, mRate, format);
+   LabelDialog dlg(this, *GetTrackFactory(), GetTracks(),
+                   lt, index,
+                   mViewInfo, mRate,
+                   format, freqFormat);
 
    if (dlg.ShowModal() == wxID_OK) {
       PushState(_("Edited labels"), _("Label"));
       RedrawProject();
    }
+}
+
+void AudacityProject::OnEditLabels()
+{
+   DoEditLabels();
 }
 
 void AudacityProject::OnApplyChain()
@@ -6400,7 +6636,7 @@ void AudacityProject::OnEditChains()
 
 void AudacityProject::OnRemoveTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
    Track *f = NULL;
    Track *l = NULL;
@@ -6411,7 +6647,7 @@ void AudacityProject::OnRemoveTracks()
             mMixerBoard->RemoveTrackCluster((WaveTrack*)t);
          if (!f)
             f = l;         // Capture the track preceeding the first removed track
-         t = iter.RemoveCurrent(true);
+         t = iter.RemoveCurrent();
       }
       else {
          l = t;
@@ -6450,8 +6686,15 @@ void AudacityProject::OnRemoveTracks()
 
 void AudacityProject::OnAbout()
 {
+#ifdef __WXMAC__
+   // Modeless dialog, consistent with other Mac applications
+   wxCommandEvent dummy;
+   wxGetApp().OnMenuAbout(dummy);
+#else
+   // Windows and Linux still modal.
    AboutDialog dlog(this);
    dlog.ShowModal();
+#endif
 }
 
 void AudacityProject::OnHelpWelcome()
@@ -6512,7 +6755,7 @@ void AudacityProject::OnAudioDeviceInfo()
 {
    wxString info = gAudioIO->GetDeviceInfo();
 
-   wxDialog dlg(this, wxID_ANY, wxString(_("Audio Device Info")));
+   wxDialogWrapper dlg(this, wxID_ANY, wxString(_("Audio Device Info")));
    dlg.SetName(dlg.GetTitle());
    ShuttleGui S(&dlg, eIsCreating);
 
@@ -6554,7 +6797,7 @@ void AudacityProject::OnSeparator()
 
 void AudacityProject::OnCollapseAllTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t)
@@ -6569,7 +6812,7 @@ void AudacityProject::OnCollapseAllTracks()
 
 void AudacityProject::OnExpandAllTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t)
@@ -6585,7 +6828,7 @@ void AudacityProject::OnExpandAllTracks()
 
 void AudacityProject::OnMuteAllTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t)
@@ -6604,7 +6847,7 @@ void AudacityProject::OnMuteAllTracks()
 
 void AudacityProject::OnUnMuteAllTracks()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
    Track *t = iter.First();
 
    while (t)
@@ -6641,13 +6884,13 @@ void AudacityProject::OnUnlockPlayRegion()
 
 void AudacityProject::OnResample()
 {
-   TrackListIterator iter(mTracks);
+   TrackListIterator iter(GetTracks());
 
    int newRate;
 
    while (true)
    {
-      wxDialog dlg(this, wxID_ANY, wxString(_("Resample")));
+      wxDialogWrapper dlg(this, wxID_ANY, wxString(_("Resample")));
       dlg.SetName(dlg.GetTitle());
       ShuttleGui S(&dlg, eIsCreating);
       wxString rate;
@@ -6826,7 +7069,7 @@ void AudacityProject::SeekLeftOrRight
                ? GridMove(t1, multiplier)
                : quietStepIsPixels
                   ? mViewInfo.OffsetTimeByPixels(
-                        t1, int(multiplier * quietSeekStepPositive))
+                        t1, (int)(multiplier * quietSeekStepPositive))
                   : t1 +  multiplier * quietSeekStepPositive
          ));
 
@@ -6841,11 +7084,11 @@ void AudacityProject::SeekLeftOrRight
                ? GridMove(t0, multiplier)
                : quietStepIsPixels
                   ? mViewInfo.OffsetTimeByPixels(
-                     t0, int(multiplier * quietSeekStepPositive))
+                     t0, (int)(multiplier * quietSeekStepPositive))
                   : t0 + multiplier * quietSeekStepPositive
          ));
 
-         // Make sure new position is in view.
+         // Make sure NEW position is in view.
          GetTrackPanel()->ScrollIntoView(mViewInfo.selectedRegion.t0());
       }
       GetTrackPanel()->Refresh(false);
@@ -6871,7 +7114,7 @@ void AudacityProject::SeekLeftOrRight
       if (audioStepIsPixels) {
          const double streamTime = gAudioIO->GetStreamTime();
          const double newTime =
-            mViewInfo.OffsetTimeByPixels(streamTime, int(audioSeekStepPositive));
+            mViewInfo.OffsetTimeByPixels(streamTime, (int)(audioSeekStepPositive));
          seconds = newTime - streamTime;
       }
       else
@@ -6893,7 +7136,7 @@ void AudacityProject::SeekLeftOrRight
                ? GridMove(t0, multiplier)
                : quietStepIsPixels
                   ? mViewInfo.OffsetTimeByPixels(
-                        t0, int(multiplier * quietSeekStepPositive))
+                        t0, (int)(multiplier * quietSeekStepPositive))
                   : t0 + multiplier * quietSeekStepPositive
          ));
 
@@ -6909,11 +7152,11 @@ void AudacityProject::SeekLeftOrRight
                ? GridMove(t1, multiplier)
                : quietStepIsPixels
                   ? mViewInfo.OffsetTimeByPixels(
-                        t1, int(multiplier * quietSeekStepPositive))
+                        t1, (int)(multiplier * quietSeekStepPositive))
                   : t1 + multiplier * quietSeekStepPositive
          ));
 
-         // Make sure new position is in view.
+         // Make sure NEW position is in view.
          GetTrackPanel()->ScrollIntoView(mViewInfo.selectedRegion.t1());
       }
       GetTrackPanel()->Refresh(false);
@@ -6936,7 +7179,7 @@ void AudacityProject::SeekLeftOrRight
                   ? GridMove(t0, multiplier)
                   : quietStepIsPixels
                      ? mViewInfo.OffsetTimeByPixels(
-                          t0, int(multiplier * quietSeekStepPositive))
+                          t0, (int)(multiplier * quietSeekStepPositive))
                      : t0 + multiplier * quietSeekStepPositive)),
             false // do not swap selection boundaries
          );
@@ -6944,6 +7187,10 @@ void AudacityProject::SeekLeftOrRight
 
          // Move the visual cursor, avoiding an unnecessary complete redraw
          GetTrackPanel()->DrawOverlays(false);
+         GetRulerPanel()->DrawOverlays(false);
+
+         // This updates the selection shown on the selection bar, and the play region
+         TP_DisplaySelection();
       }
       else
       {
@@ -6955,7 +7202,7 @@ void AudacityProject::SeekLeftOrRight
          GetTrackPanel()->Refresh(false);
       }
 
-      // Make sure new position is in view
+      // Make sure NEW position is in view
       GetTrackPanel()->ScrollIntoView(mViewInfo.selectedRegion.t1());
    }
 }

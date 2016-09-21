@@ -22,26 +22,32 @@
 
 class ShuttleGui;
 
-class TracksPrefs :public PrefsPanel
+class TracksPrefs final : public PrefsPanel
 {
  public:
    TracksPrefs(wxWindow * parent);
    ~TracksPrefs();
-   virtual bool Apply();
+   bool Apply() override;
+
+   static bool GetPinnedHeadPreference();
+   static void SetPinnedHeadPreference(bool value, bool flush = false);
+   static const wxChar *ScrollingPreferenceKey();
+   static inline bool ScrollingPreferenceDefault() { return false; }
 
  private:
    void Populate();
    void PopulateOrExchange(ShuttleGui & S);
 
+   static int iPreferencePinned;
    wxArrayString mSoloCodes;
    wxArrayString mSoloChoices;
    wxArrayInt    mViewCodes;
    wxArrayString mViewChoices;
 };
 
-class TracksPrefsFactory : public PrefsPanelFactory
+class TracksPrefsFactory final : public PrefsPanelFactory
 {
 public:
-   virtual PrefsPanel *Create(wxWindow *parent);
+   PrefsPanel *Create(wxWindow *parent) override;
 };
 #endif

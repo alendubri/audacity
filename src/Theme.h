@@ -60,6 +60,7 @@ public:
    void Init(int width);
    void GetNextPosition( int xSize, int ySize );
    void SetNewGroup( int iGroupSize );
+   void SetColourGroup( );
    wxRect Rect();
    void RectMid( int &x, int &y );
 
@@ -82,7 +83,7 @@ private:
 
 };
 
-class AUDACITY_DLL_API ThemeBase
+class AUDACITY_DLL_API ThemeBase /* not final */
 {
 public:
    ThemeBase(void);
@@ -136,15 +137,15 @@ protected:
 };
 
 
-class AUDACITY_DLL_API Theme : public ThemeBase
+class AUDACITY_DLL_API Theme final : public ThemeBase
 {
 public:
    Theme(void);
 public:
    ~Theme(void);
 public:
-   virtual void EnsureInitialised();
-   virtual void ApplyUpdatedImages();
+   void EnsureInitialised() override;
+   void ApplyUpdatedImages() override;
    void RegisterImages();
    void RegisterColours();
    bool mbInitialised;

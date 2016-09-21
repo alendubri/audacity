@@ -37,7 +37,7 @@ enum {
    ID_FILE_LIST
 };
 
-class AutoRecoveryDialog : public wxDialog
+class AutoRecoveryDialog final : public wxDialogWrapper
 {
 public:
    AutoRecoveryDialog(wxWindow *parent);
@@ -57,7 +57,7 @@ public:
 };
 
 AutoRecoveryDialog::AutoRecoveryDialog(wxWindow *parent) :
-   wxDialog(parent, -1, _("Automatic Crash Recovery"),
+   wxDialogWrapper(parent, -1, _("Automatic Crash Recovery"),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE & (~wxCLOSE_BOX)) // no close box
 {
@@ -66,7 +66,7 @@ AutoRecoveryDialog::AutoRecoveryDialog(wxWindow *parent) :
    PopulateOrExchange(S);
 }
 
-BEGIN_EVENT_TABLE(AutoRecoveryDialog, wxDialog)
+BEGIN_EVENT_TABLE(AutoRecoveryDialog, wxDialogWrapper)
    EVT_BUTTON(ID_RECOVER_ALL, AutoRecoveryDialog::OnRecoverAll)
    EVT_BUTTON(ID_RECOVER_NONE, AutoRecoveryDialog::OnRecoverNone)
    EVT_BUTTON(ID_QUIT_AUDACITY, AutoRecoveryDialog::OnQuitAudacity)
@@ -123,7 +123,7 @@ void AutoRecoveryDialog::PopulateList()
    int i = 0;
    for (bool c = dir.GetFirst(&filename, wxT("*.autosave"), wxDIR_FILES);
         c; c = dir.GetNext(&filename))
-      mFileList->InsertItem(i++, wxFileName(filename).GetName());
+        mFileList->InsertItem(i++, wxFileName{ filename }.GetName());
 
    mFileList->SetColumnWidth(0, wxLIST_AUTOSIZE);
 }
@@ -214,12 +214,12 @@ static bool RecoverAllProjects(AudacityProject** pproj)
          *pproj = NULL;
       } else
       {
-         // Create new project window
+         // Create NEW project window
          proj = CreateNewAudacityProject();
       }
 
       // Open project. When an auto-save file has been opened successfully,
-      // the opened auto-save file is automatically deleted and a new one
+      // the opened auto-save file is automatically deleted and a NEW one
       // is created.
       proj->OpenFile(files[i], false);
    }
@@ -248,9 +248,7 @@ bool ShowAutoRecoveryDialogIfNeeded(AudacityProject** pproj,
       // This must be done before "dlg" is declared.
       wxEventLoopBase::GetActive()->YieldFor(wxEVT_CATEGORY_UI);
 
-      AutoRecoveryDialog *dlg = new AutoRecoveryDialog(NULL); //*pproj);
-      int ret = dlg->ShowModal();
-      delete dlg;
+      int ret = AutoRecoveryDialog{nullptr}.ShowModal();
 
       switch (ret)
       {
@@ -283,6 +281,28 @@ RecordingRecoveryHandler::RecordingRecoveryHandler(AudacityProject* proj)
    mNumChannels = -1;
 }
 
+int RecordingRecoveryHandler::FindTrack() const
+{
+   WaveTrackArray tracks = mProject->GetTracks()->GetWaveTrackArray(false);
+   int index;
+   if (mAutoSaveIdent)
+   {
+      for (index = 0; index < (int)tracks.size(); index++)
+      {
+         if (tracks[index]->GetAutoSaveIdent() == mAutoSaveIdent)
+         {
+            break;
+         }
+      }
+   }
+   else
+   {
+      index = tracks.size() - mNumChannels + mChannel;
+   }
+
+   return index;
+}
+
 bool RecordingRecoveryHandler::HandleXMLTag(const wxChar *tag,
                                             const wxChar **attrs)
 {
@@ -296,40 +316,30 @@ bool RecordingRecoveryHandler::HandleXMLTag(const wxChar *tag,
          return false;
       }
 
-      // We need to find the track and sequence where the blockfile belongs
       WaveTrackArray tracks = mProject->GetTracks()->GetWaveTrackArray(false);
-      int index;
-      if (mAutoSaveIdent)
-      {
-         for (index = 0; index < (int) tracks.GetCount(); index++)
-         {
-            if (tracks[index]->GetAutoSaveIdent() == mAutoSaveIdent)
-            {
-               break;
-            }
-         }
-      }
-      else
-      {
-         index = tracks.GetCount() - mNumChannels + mChannel;
-      }
+      int index = FindTrack();
+      // We need to find the track and sequence where the blockfile belongs
 
-      if (index < 0 || index >= (int) tracks.GetCount())
+      if (index < 0 || index >= (int)tracks.size())
       {
          // This should only happen if there is a bug
          wxASSERT(false);
          return false;
       }
 
-      WaveTrack* track = tracks.Item(index);
+      WaveTrack* track = tracks[index];
       WaveClip*  clip = track->NewestOrNewClip();
       Sequence* seq = clip->GetSequence();
 
       // Load the blockfile from the XML
-      BlockFile* blockFile = NULL;
-      DirManager* dirManager = mProject->GetDirManager();
+      const auto &dirManager = mProject->GetDirManager();
       dirManager->SetLoadingFormat(seq->GetSampleFormat());
-      dirManager->SetLoadingTarget(&blockFile);
+
+      BlockArray array;
+      array.resize(1);
+      dirManager->SetLoadingTarget(&array, 0);
+      auto &blockFile = array[0].f;
+
       if (!dirManager->HandleXMLTag(tag, attrs) || !blockFile)
       {
          // This should only happen if there is a bug
@@ -385,6 +395,29 @@ bool RecordingRecoveryHandler::HandleXMLTag(const wxChar *tag,
    }
 
    return true;
+}
+
+void RecordingRecoveryHandler::HandleXMLEndTag(const wxChar *tag)
+{
+   if (wxStrcmp(tag, wxT("simpleblockfile")) == 0)
+      // Still in inner looop
+      return;
+
+   WaveTrackArray tracks = mProject->GetTracks()->GetWaveTrackArray(false);
+   int index = FindTrack();
+   // We need to find the track and sequence where the blockfile belongs
+
+   if (index < 0 || index >= (int)tracks.size()) {
+      // This should only happen if there is a bug
+      wxASSERT(false);
+   }
+   else {
+      WaveTrack* track = tracks[index];
+      WaveClip*  clip = track->NewestOrNewClip();
+      Sequence* seq = clip->GetSequence();
+
+      seq->ConsistencyCheck(wxT("RecordingRecoveryHandler::HandleXMLEndTag"));
+   }
 }
 
 XMLTagHandler* RecordingRecoveryHandler::HandleXMLChild(const wxChar *tag)
@@ -652,10 +685,11 @@ bool AutoSaveFile::Decode(const wxString & fileName)
    char ident[sizeof(AutoSaveIdent)];
    size_t len = strlen(AutoSaveIdent);
 
-   wxFileName fn(fileName);
+   const wxFileName fn(fileName);
+   const wxString fnPath{fn.GetFullPath()};
    wxFFile file;
 
-   if (!file.Open(fn.GetFullPath(), wxT("rb")))
+   if (!file.Open(fnPath, wxT("rb")))
    {
       return false;
    }
@@ -670,7 +704,7 @@ bool AutoSaveFile::Decode(const wxString & fileName)
       file.Close();
 
       // Add </project> tag, if necessary
-      if (!file.Open(fn.GetFullPath(), wxT("r+b")))
+      if (!file.Open(fnPath, wxT("r+b")))
       {
          // Really shouldn't happen, but let the caller deal with it
          return false;
@@ -680,6 +714,10 @@ bool AutoSaveFile::Decode(const wxString & fileName)
       // "</project>" somewhere.
       const int bufsize = 16;
       char buf[bufsize + 1];
+
+      // FIXME: TRAP_ERR AutoSaveFile::Decode reports OK even when wxFFile errors.
+      // Might be incompletely written file, but not clear that is OK to be
+      // silent about.
       if (file.SeekEnd(-bufsize))
       {
          if (file.Read(buf, bufsize) == bufsize)
@@ -716,19 +754,21 @@ bool AutoSaveFile::Decode(const wxString & fileName)
    file.Close();
 
    // Decode to a temporary file to preserve the orignal.
-   wxString tempName = fn.CreateTempFileName(fn.GetFullPath());
+   wxString tempName = fn.CreateTempFileName(fnPath);
    bool opened = false;
 
    XMLFileWriter out;
 
+   // JKC: ANSWER-ME: Is the try catch actually doing anything?
+   // If it is useful, why are we not using it everywhere?
+   // If it isn't useful, why are we doing it here?
    try
    {
-	   out.Open(tempName, wxT("wb"));
-	   opened = out.IsOpened();
+      out.Open(tempName, wxT("wb"));
+      opened = out.IsOpened();
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException&)
    {
-	   delete pException;
    }
 
    if (!opened)

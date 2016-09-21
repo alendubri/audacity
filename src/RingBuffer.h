@@ -15,32 +15,32 @@
 
 class RingBuffer {
  public:
-   RingBuffer(sampleFormat format, int size);
+   RingBuffer(sampleFormat format, size_t size);
    ~RingBuffer();
 
    //
    // For the writer only:
    //
 
-   int AvailForPut();
-   int Put(samplePtr buffer, sampleFormat format, int samples);
+   size_t AvailForPut();
+   size_t Put(samplePtr buffer, sampleFormat format, size_t samples);
 
    //
    // For the reader only:
    //
 
-   int AvailForGet();
-   int Get(samplePtr buffer, sampleFormat format, int samples);
-   int Discard(int samples);
+   size_t AvailForGet();
+   size_t Get(samplePtr buffer, sampleFormat format, size_t samples);
+   size_t Discard(size_t samples);
 
  private:
-   int Len();
+   size_t Len();
 
    sampleFormat  mFormat;
-   int           mStart;
-   int           mEnd;
-   int           mBufferSize;
-   samplePtr     mBuffer;
+   size_t        mStart { 0 };
+   size_t        mEnd { 0 };
+   size_t        mBufferSize;
+   SampleBuffer  mBuffer;
 };
 
 #endif /*  __AUDACITY_RING_BUFFER__ */

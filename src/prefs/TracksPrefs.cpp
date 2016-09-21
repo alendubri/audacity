@@ -30,7 +30,20 @@
 
 #include "../Experimental.h"
 
-////////////////////////////////////////////////////////////////////////////////
+int TracksPrefs::iPreferencePinned = -1;
+
+namespace {
+   const wxChar *PinnedHeadPreferenceKey()
+   {
+      return wxT("/AudioIO/PinnedHead");
+   }
+
+   bool PinnedHeadPreferenceDefault()
+   {
+      return false;
+   }
+}
+
 
 TracksPrefs::TracksPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Tracks"))
@@ -47,14 +60,20 @@ TracksPrefs::~TracksPrefs()
 {
 }
 
+const wxChar *TracksPrefs::ScrollingPreferenceKey()
+{
+   static auto string = wxT("/GUI/ScrollBeyondZero");
+   return string;
+}
+
 void TracksPrefs::Populate()
 {
-   mSoloCodes.Add(wxT("Standard"));
    mSoloCodes.Add(wxT("Simple"));
+   mSoloCodes.Add(wxT("Multi"));
    mSoloCodes.Add(wxT("None"));
 
-   mSoloChoices.Add(_("Standard"));
    mSoloChoices.Add(_("Simple"));
+   mSoloChoices.Add(_("Multi-track"));
    mSoloChoices.Add(_("None"));
 
 
@@ -62,12 +81,12 @@ void TracksPrefs::Populate()
    // we don't display them by increasing integer values.
 
    mViewChoices.Add(_("Waveform"));
-   mViewCodes.Add(int(WaveTrack::Waveform));
+   mViewCodes.Add((int)(WaveTrack::Waveform));
 
    mViewChoices.Add(_("Waveform (dB)"));
-   mViewCodes.Add(int(WaveTrack::obsoleteWaveformDBDisplay));
+   mViewCodes.Add((int)(WaveTrack::obsoleteWaveformDBDisplay));
 
-   mViewChoices.Add(_("Spectrum"));
+   mViewChoices.Add(_("Spectrogram"));
    mViewCodes.Add(WaveTrack::Spectrum);
 
    //------------------------- Main section --------------------
@@ -85,7 +104,10 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
 
    S.StartStatic(_("Display"));
    {
-      S.TieCheckBox(_("&Update display while playing"),
+      S.TieCheckBox(_("&Pinned Recording/Playback head"),
+                    PinnedHeadPreferenceKey(),
+                    PinnedHeadPreferenceDefault());
+      S.TieCheckBox(_("&Update display when Recording/Playback head unpinned"),
                     wxT("/GUI/AutoScroll"),
                     true);
       S.TieCheckBox(_("Automatically &fit tracks vertically zoomed"),
@@ -96,15 +118,23 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
 
       S.StartMultiColumn(2);
       {
-
-         S.TieChoice(_("Default &View Mode:"),
+         S.TieChoice(_("Default &view mode:"),
                      wxT("/GUI/DefaultViewModeNew"),
                      0,
                      mViewChoices,
                      mViewCodes);
          S.SetSizeHints(mViewChoices);
+
+         S.TieTextBox(_("Default audio track &name:"),
+                      wxT("/GUI/TrackNames/DefaultTrackName"),
+                      _("Audio Track"),
+                      30);
       }
       S.EndMultiColumn();
+
+      S.TieCheckBox(_("Sho&w audio track name as overlay"),
+                  wxT("/GUI/ShowTrackNameInWaveform"),
+                  false);
    }
    S.EndStatic();
 
@@ -128,8 +158,8 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
                     true);
 #ifdef EXPERIMENTAL_SCROLLING_LIMITS
       S.TieCheckBox(_("Enable scrolling left of &zero"),
-                    wxT("/GUI/ScrollBeyondZero"),
-                    false);
+                    ScrollingPreferenceKey(),
+                    ScrollingPreferenceDefault());
 #endif
 
       S.AddSpace(10);
@@ -148,6 +178,25 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
    S.EndStatic();
 }
 
+bool TracksPrefs::GetPinnedHeadPreference()
+{
+   // JKC: Cache this setting as it is read many times during drawing, and otherwise causes screen flicker.
+   // Correct solution would be to re-write wxFileConfig to be efficient.
+   if( iPreferencePinned >= 0 )
+      return iPreferencePinned == 1;
+   bool bResult = gPrefs->ReadBool(PinnedHeadPreferenceKey(), PinnedHeadPreferenceDefault());
+   iPreferencePinned = bResult ? 1: 0;
+   return bResult;
+}
+
+void TracksPrefs::SetPinnedHeadPreference(bool value, bool flush)
+{
+   iPreferencePinned = value ? 1 :0;
+   gPrefs->Write(PinnedHeadPreferenceKey(), value);
+   if(flush)
+      gPrefs->Flush();
+}
+
 bool TracksPrefs::Apply()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
@@ -158,5 +207,6 @@ bool TracksPrefs::Apply()
 
 PrefsPanel *TracksPrefsFactory::Create(wxWindow *parent)
 {
-   return new TracksPrefs(parent);
+   wxASSERT(parent); // to justify safenew
+   return safenew TracksPrefs(parent);
 }

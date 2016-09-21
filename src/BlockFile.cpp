@@ -42,18 +42,19 @@ out.
 
 *//*******************************************************************/
 
+#include "Audacity.h"
 #include "BlockFile.h"
 
 #include <float.h>
-#include <math.h>
+#include <cmath>
 
 #include <wx/utils.h>
 #include <wx/filefn.h>
 #include <wx/ffile.h>
 #include <wx/log.h>
-#include <wx/math.h>
 
 #include "Internat.h"
+#include "MemoryX.h"
 
 // msmeyer: Define this to add debug output via printf()
 //#define DEBUG_BLOCKFILE
@@ -69,7 +70,7 @@ out.
 static const int headerTagLen = 20;
 static char headerTag[headerTagLen + 1] = "AudacityBlockFile112";
 
-SummaryInfo::SummaryInfo(sampleCount samples)
+SummaryInfo::SummaryInfo(size_t samples)
 {
    format = floatSample;
 
@@ -85,7 +86,7 @@ SummaryInfo::SummaryInfo(sampleCount samples)
    totalSummaryBytes = offset256 + (frames256 * bytesPerFrame);
 }
 
-char *BlockFile::fullSummary = 0;
+ArrayOf<char> BlockFile::fullSummary;
 
 /// Initializes the base BlockFile data.  The block is initially
 /// unlocked and its reference count is 1.
@@ -97,20 +98,24 @@ char *BlockFile::fullSummary = 0;
 ///                 will store at least the summary data here.
 ///
 /// @param samples  The number of samples this BlockFile contains.
-BlockFile::BlockFile(wxFileName fileName, sampleCount samples):
+BlockFile::BlockFile(wxFileNameWrapper &&fileName, size_t samples):
    mLockCount(0),
-   mRefCount(1),
-   mFileName(fileName),
+   mFileName(std::move(fileName)),
    mLen(samples),
    mSummaryInfo(samples)
 {
    mSilentLog=FALSE;
 }
 
+// static
+unsigned long BlockFile::gBlockFileDestructionCount { 0 };
+
 BlockFile::~BlockFile()
 {
    if (!IsLocked() && mFileName.HasName())
       wxRemoveFile(mFileName.GetFullPath());
+
+   ++gBlockFileDestructionCount;
 }
 
 /// Returns the file name of the disk file associated with this
@@ -118,15 +123,15 @@ BlockFile::~BlockFile()
 /// but most BlockFiles have at least their summary data here.
 /// (some, i.e. SilentBlockFiles, do not correspond to a file on
 ///  disk and have empty file names)
-wxFileName BlockFile::GetFileName()
+auto BlockFile::GetFileName() const -> GetFileNameResult
 {
-   return mFileName;
+   return { mFileName };
 }
 
 ///sets the file name the summary info will be saved in.  threadsafe.
-void BlockFile::SetFileName(wxFileName &name)
+void BlockFile::SetFileName(wxFileNameWrapper &&name)
 {
-   mFileName=name;
+   mFileName=std::move(name);
 }
 
 
@@ -158,33 +163,6 @@ bool BlockFile::IsLocked()
    return mLockCount > 0;
 }
 
-/// Increases the reference count of this block by one.  Only
-/// DirManager should call this method.
-void BlockFile::Ref()
-{
-   mRefCount++;
-   BLOCKFILE_DEBUG_OUTPUT("Ref", mRefCount);
-}
-
-/// Decreases the reference count of this block by one.  If this
-/// causes the count to become zero, deletes the associated disk
-/// file and deletes this object
-bool BlockFile::Deref()
-{
-   mRefCount--;
-   BLOCKFILE_DEBUG_OUTPUT("Deref", mRefCount);
-   if (mRefCount <= 0) {
-      delete this;
-      return true;
-   } else
-      return false;
-}
-
-void BlockFile::Deinit()
-{
-   if(fullSummary)delete[] fullSummary;
-}
-
 /// Get a buffer containing a summary block describing this sample
 /// data.  This must be called by derived classes when they
 /// are constructed, to allow them to construct their summary data,
@@ -193,44 +171,60 @@ void BlockFile::Deinit()
 /// This method also has the side effect of setting the mMin, mMax,
 /// and mRMS members of this class.
 ///
-/// You must not delete the returned buffer; it is static to this
+/// You must not DELETE the returned buffer; it is static to this
 /// method.
 ///
 /// @param buffer A buffer containing the sample data to be analyzed
 /// @param len    The length of the sample data
 /// @param format The format of the sample data.
-void *BlockFile::CalcSummary(samplePtr buffer, sampleCount len,
-                             sampleFormat format)
+void *BlockFile::CalcSummary(samplePtr buffer, size_t len,
+                             sampleFormat format, ArrayOf<char> &cleanup)
 {
-   if(fullSummary)delete[] fullSummary;
-   fullSummary = new char[mSummaryInfo.totalSummaryBytes];
+   // Caller has nothing to deallocate
+   cleanup.reset();
 
-   memcpy(fullSummary, headerTag, headerTagLen);
+   fullSummary.reinit(mSummaryInfo.totalSummaryBytes);
 
-   float *summary64K = (float *)(fullSummary + mSummaryInfo.offset64K);
-   float *summary256 = (float *)(fullSummary + mSummaryInfo.offset256);
+   memcpy(fullSummary.get(), headerTag, headerTagLen);
+
+   float *summary64K = (float *)(fullSummary.get() + mSummaryInfo.offset64K);
+   float *summary256 = (float *)(fullSummary.get() + mSummaryInfo.offset256);
 
    float *fbuffer = new float[len];
    CopySamples(buffer, format,
                (samplePtr)fbuffer, floatSample, len);
 
-   sampleCount sumLen;
-   sampleCount i, j, jcount;
+   CalcSummaryFromBuffer(fbuffer, len, summary256, summary64K);
+
+   delete[] fbuffer;
+
+   return fullSummary.get();
+}
+
+void BlockFile::CalcSummaryFromBuffer(const float *fbuffer, size_t len,
+                                      float *summary256, float *summary64K)
+{
+   decltype(len) sumLen;
 
    float min, max;
    float sumsq;
+   double totalSquares = 0.0;
+   double fraction { 0.0 };
 
    // Recalc 256 summaries
    sumLen = (len + 255) / 256;
+   int summaries = 256;
 
-   for (i = 0; i < sumLen; i++) {
+   for (decltype(sumLen) i = 0; i < sumLen; i++) {
       min = fbuffer[i * 256];
       max = fbuffer[i * 256];
       sumsq = ((float)min) * ((float)min);
-      jcount = 256;
-      if (i * 256 + jcount > len)
+      decltype(len) jcount = 256;
+      if (jcount > len - i * 256) {
          jcount = len - i * 256;
-      for (j = 1; j < jcount; j++) {
+         fraction = 1.0 - (jcount / 256.0);
+      }
+      for (decltype(jcount) j = 1; j < jcount; j++) {
          float f1 = fbuffer[i * 256 + j];
          sumsq += ((float)f1) * ((float)f1);
          if (f1 < min)
@@ -239,28 +233,34 @@ void *BlockFile::CalcSummary(samplePtr buffer, sampleCount len,
             max = f1;
       }
 
+      totalSquares += sumsq;
       float rms = (float)sqrt(sumsq / jcount);
 
       summary256[i * 3] = min;
       summary256[i * 3 + 1] = max;
-      summary256[i * 3 + 2] = rms;
+      summary256[i * 3 + 2] = rms;  // The rms is correct, but this may be for less than 256 samples in last loop.
    }
-   for (i = sumLen; i < mSummaryInfo.frames256; i++) {
+   for (auto i = sumLen; i < mSummaryInfo.frames256; i++) {
       // filling in the remaining bits with non-harming/contributing values
+      // rms values are not "non-harming", so keep  count of them:
+      summaries--;
       summary256[i * 3] = FLT_MAX;  // min
       summary256[i * 3 + 1] = -FLT_MAX;   // max
       summary256[i * 3 + 2] = 0.0f; // rms
    }
 
+   // Calculate now while we can do it accurately
+   mRMS = sqrt(totalSquares/len);
+
    // Recalc 64K summaries
    sumLen = (len + 65535) / 65536;
 
-   for (i = 0; i < sumLen; i++) {
+   for (decltype(sumLen) i = 0; i < sumLen; i++) {
       min = summary256[3 * i * 256];
       max = summary256[3 * i * 256 + 1];
       sumsq = (float)summary256[3 * i * 256 + 2];
       sumsq *= sumsq;
-      for (j = 1; j < 256; j++) {   // we can overflow the useful summary256 values here, but have put non-harmful values in them
+      for (decltype(len) j = 1; j < 256; j++) {   // we can overflow the useful summary256 values here, but have put non-harmful values in them
          if (summary256[3 * (i * 256 + j)] < min)
             min = summary256[3 * (i * 256 + j)];
          if (summary256[3 * (i * 256 + j) + 1] > max)
@@ -269,40 +269,33 @@ void *BlockFile::CalcSummary(samplePtr buffer, sampleCount len,
          sumsq += r1*r1;
       }
 
-      float rms = (float)sqrt(sumsq / 256);  // the '256' is not quite right at the edges as not all summary256 entries will be filled with useful values
+      double denom = (i < sumLen - 1) ? 256.0 : summaries - fraction;
+      float rms = (float)sqrt(sumsq / denom);
 
       summary64K[i * 3] = min;
       summary64K[i * 3 + 1] = max;
       summary64K[i * 3 + 2] = rms;
    }
-   for (i = sumLen; i < mSummaryInfo.frames64K; i++) {
+   for (auto i = sumLen; i < mSummaryInfo.frames64K; i++) {
+      wxASSERT_MSG(false, wxT("Out of data for mSummaryInfo"));   // Do we ever get here?
       summary64K[i * 3] = 0.0f;  // probably should be FLT_MAX, need a test case
       summary64K[i * 3 + 1] = 0.0f; // probably should be -FLT_MAX, need a test case
-      summary64K[i * 3 + 2] = 0.0f;
+      summary64K[i * 3 + 2] = 0.0f; // just padding
    }
 
-   // Recalc block-level summary
+   // Recalc block-level summary (mRMS already calculated)
    min = summary64K[0];
    max = summary64K[1];
-   sumsq = (float)summary64K[2];
-   sumsq *= sumsq;
 
-   for (i = 1; i < sumLen; i++) {
+   for (decltype(sumLen) i = 1; i < sumLen; i++) {
       if (summary64K[3*i] < min)
          min = summary64K[3*i];
       if (summary64K[3*i+1] > max)
          max = summary64K[3*i+1];
-      float r1 = (float)summary64K[3*i+2];
-      sumsq += (r1*r1);
    }
 
    mMin = min;
    mMax = max;
-   mRMS = sqrt(sumsq / sumLen);
-
-   delete[] fbuffer;
-
-   return fullSummary;
 }
 
 static void ComputeMinMax256(float *summary256,
@@ -323,7 +316,7 @@ static void ComputeMinMax256(float *summary256,
          max = summary256[3*i+1];
       else if (!(summary256[3*i+1] <= max))
          bad++;
-      if (wxIsNaN(summary256[3*i+2]))
+      if (std::isnan(summary256[3*i+2]))
          bad++;
       if (summary256[3*i+2] < -1 || summary256[3*i+2] > 1)
          bad++;
@@ -382,20 +375,20 @@ void BlockFile::FixSummary(void *data)
 ///                should be stored
 /// @param *outRMS A pointer to where the maximum RMS value for this
 ///                region should be stored.
-void BlockFile::GetMinMax(sampleCount start, sampleCount len,
-                  float *outMin, float *outMax, float *outRMS)
+void BlockFile::GetMinMax(size_t start, size_t len,
+                  float *outMin, float *outMax, float *outRMS) const
 {
    // TODO: actually use summaries
-   samplePtr blockData = NewSamples(len, floatSample);
-   this->ReadData(blockData, floatSample, start, len);
+   SampleBuffer blockData(len, floatSample);
+   this->ReadData(blockData.ptr(), floatSample, start, len);
 
    float min = FLT_MAX;
    float max = -FLT_MAX;
    float sumsq = 0;
 
-   for( int i = 0; i < len; i++ )
+   for( decltype(len) i = 0; i < len; i++ )
    {
-      float sample = ((float*)blockData)[i];
+      float sample = ((float*)blockData.ptr())[i];
 
       if( sample > max )
          max = sample;
@@ -403,8 +396,6 @@ void BlockFile::GetMinMax(sampleCount start, sampleCount len,
          min = sample;
       sumsq += (sample*sample);
    }
-
-   DeleteSamples(blockData);
 
    *outMin = min;
    *outMax = max;
@@ -421,7 +412,7 @@ void BlockFile::GetMinMax(sampleCount start, sampleCount len,
 ///                should be stored
 /// @param *outRMS A pointer to where the maximum RMS value for this
 ///                block should be stored.
-void BlockFile::GetMinMax(float *outMin, float *outMax, float *outRMS)
+void BlockFile::GetMinMax(float *outMin, float *outMax, float *outRMS) const
 {
    *outMin = mMin;
    *outMax = mMax;
@@ -438,15 +429,16 @@ void BlockFile::GetMinMax(float *outMin, float *outMax, float *outRMS)
 /// @param start   The offset in 256-sample increments
 /// @param len     The number of 256-sample summary frames to read
 bool BlockFile::Read256(float *buffer,
-                        sampleCount start, sampleCount len)
+                        size_t start, size_t len)
 {
    wxASSERT(start >= 0);
 
    char *summary = new char[mSummaryInfo.totalSummaryBytes];
+   // FIXME: TRAP_ERR ReadSummary() could return fail.
    this->ReadSummary(summary);
 
-   if (start+len > mSummaryInfo.frames256)
-      len = mSummaryInfo.frames256 - start;
+   start = std::min( start, mSummaryInfo.frames256 );
+   len = std::min( len, mSummaryInfo.frames256 - start );
 
    CopySamples(summary + mSummaryInfo.offset256 + (start * mSummaryInfo.bytesPerFrame),
                mSummaryInfo.format,
@@ -454,8 +446,7 @@ bool BlockFile::Read256(float *buffer,
 
    if (mSummaryInfo.fields == 2) {
       // No RMS info
-      int i;
-      for(i=len-1; i>=0; i--) {
+      for(auto i = len; i--;) {
          buffer[3*i+2] = (fabs(buffer[2*i]) + fabs(buffer[2*i+1]))/4.0;
          buffer[3*i+1] = buffer[2*i+1];
          buffer[3*i] = buffer[2*i];
@@ -477,15 +468,16 @@ bool BlockFile::Read256(float *buffer,
 /// @param start   The offset in 64K-sample increments
 /// @param len     The number of 64K-sample summary frames to read
 bool BlockFile::Read64K(float *buffer,
-                        sampleCount start, sampleCount len)
+                        size_t start, size_t len)
 {
    wxASSERT(start >= 0);
 
    char *summary = new char[mSummaryInfo.totalSummaryBytes];
+   // FIXME: TRAP_ERR ReadSummary() could return fail.
    this->ReadSummary(summary);
 
-   if (start+len > mSummaryInfo.frames64K)
-      len = mSummaryInfo.frames64K - start;
+   start = std::min( start, mSummaryInfo.frames64K );
+   len = std::min( len, mSummaryInfo.frames64K - start );
 
    CopySamples(summary + mSummaryInfo.offset64K +
                (start * mSummaryInfo.bytesPerFrame),
@@ -494,8 +486,7 @@ bool BlockFile::Read64K(float *buffer,
 
    if (mSummaryInfo.fields == 2) {
       // No RMS info; make guess
-      int i;
-      for(i=len-1; i>=0; i--) {
+      for(auto i = len; i--;) {
          buffer[3*i+2] = (fabs(buffer[2*i]) + fabs(buffer[2*i+1]))/4.0;
          buffer[3*i+1] = buffer[2*i+1];
          buffer[3*i] = buffer[2*i];
@@ -526,26 +517,29 @@ bool BlockFile::Read64K(float *buffer,
 ///                     file.
 /// @param aliasChannel The channel where this block's data is located in
 ///                     the aliased file
-AliasBlockFile::AliasBlockFile(wxFileName baseFileName,
-                               wxFileName aliasedFileName,
+AliasBlockFile::AliasBlockFile(wxFileNameWrapper &&baseFileName,
+                               wxFileNameWrapper &&aliasedFileName,
                                sampleCount aliasStart,
-                               sampleCount aliasLen, int aliasChannel):
-   BlockFile(wxFileName(baseFileName.GetFullPath() + wxT(".auf")), aliasLen),
-   mAliasedFileName(aliasedFileName),
+                               size_t aliasLen, int aliasChannel):
+   BlockFile {
+      (baseFileName.SetExt(wxT("auf")), std::move(baseFileName)),
+      aliasLen
+   },
+   mAliasedFileName(std::move(aliasedFileName)),
    mAliasStart(aliasStart),
    mAliasChannel(aliasChannel)
 {
    mSilentAliasLog=FALSE;
 }
 
-AliasBlockFile::AliasBlockFile(wxFileName existingSummaryFileName,
-                               wxFileName aliasedFileName,
+AliasBlockFile::AliasBlockFile(wxFileNameWrapper &&existingSummaryFileName,
+                               wxFileNameWrapper &&aliasedFileName,
                                sampleCount aliasStart,
-                               sampleCount aliasLen,
+                               size_t aliasLen,
                                int aliasChannel,
                                float min, float max, float rms):
-   BlockFile(existingSummaryFileName, aliasLen),
-   mAliasedFileName(aliasedFileName),
+   BlockFile{ std::move(existingSummaryFileName), aliasLen },
+   mAliasedFileName(std::move(aliasedFileName)),
    mAliasStart(aliasStart),
    mAliasChannel(aliasChannel)
 {
@@ -570,7 +564,7 @@ void AliasBlockFile::WriteSummary()
 
    if( !summaryFile.IsOpened() ){
       // Never silence the Log w.r.t write errors; they always count
-      // as new errors
+      // as NEW errors
       wxLogError(wxT("Unable to write summary data to file %s"),
                    mFileName.GetFullPath().c_str());
       // If we can't write, there's nothing to do.
@@ -579,14 +573,13 @@ void AliasBlockFile::WriteSummary()
 
    // To build the summary data, call ReadData (implemented by the
    // derived classes) to get the sample data
-   samplePtr sampleData = NewSamples(mLen, floatSample);
-   this->ReadData(sampleData, floatSample, 0, mLen);
+   SampleBuffer sampleData(mLen, floatSample);
+   this->ReadData(sampleData.ptr(), floatSample, 0, mLen);
 
-   void *summaryData = BlockFile::CalcSummary(sampleData, mLen,
-                                            floatSample);
+   ArrayOf<char> cleanup;
+   void *summaryData = BlockFile::CalcSummary(sampleData.ptr(), mLen,
+                                            floatSample, cleanup);
    summaryFile.Write(summaryData, mSummaryInfo.totalSummaryBytes);
-
-   DeleteSamples(sampleData);
 }
 
 AliasBlockFile::~AliasBlockFile()
@@ -601,25 +594,27 @@ AliasBlockFile::~AliasBlockFile()
 bool AliasBlockFile::ReadSummary(void *data)
 {
    wxFFile summaryFile(mFileName.GetFullPath(), wxT("rb"));
-   wxLogNull *silence=0;
-   if(mSilentLog)silence= new wxLogNull();
 
-   if( !summaryFile.IsOpened() ){
+   {
+      Maybe<wxLogNull> silence{};
+      if (mSilentLog)
+         silence.create();
 
-      // new model; we need to return valid data
-      memset(data,0,(size_t)mSummaryInfo.totalSummaryBytes);
-      if(silence) delete silence;
+      if (!summaryFile.IsOpened()){
 
-      // we silence the logging for this operation in this object
-      // after first occurrence of error; it's already reported and
-      // spewing at the user will complicate the user's ability to
-      // deal
-      mSilentLog=TRUE;
-      return true;
+         // NEW model; we need to return valid data
+         memset(data, 0, (size_t)mSummaryInfo.totalSummaryBytes);
 
-   }else mSilentLog=FALSE; // worked properly, any future error is new
+         // we silence the logging for this operation in this object
+         // after first occurrence of error; it's already reported and
+         // spewing at the user will complicate the user's ability to
+         // deal
+         mSilentLog = TRUE;
+         return true;
 
-   if(silence) delete silence;
+      }
+      else mSilentLog = FALSE; // worked properly, any future error is NEW
+   }
 
    int read = summaryFile.Read(data, (size_t)mSummaryInfo.totalSummaryBytes);
 
@@ -631,12 +626,12 @@ bool AliasBlockFile::ReadSummary(void *data)
 /// Modify this block to point at a different file.  This is generally
 /// looked down on, but it is necessary in one case: see
 /// DirManager::EnsureSafeFilename().
-void AliasBlockFile::ChangeAliasedFileName(wxFileName newAliasedFile)
+void AliasBlockFile::ChangeAliasedFileName(wxFileNameWrapper &&newAliasedFile)
 {
-   mAliasedFileName = newAliasedFile;
+   mAliasedFileName = std::move(newAliasedFile);
 }
 
-wxLongLong AliasBlockFile::GetSpaceUsage()
+auto AliasBlockFile::GetSpaceUsage() const -> DiskByteCount
 {
    wxFFile summaryFile(mFileName.GetFullPath());
    return summaryFile.Length();

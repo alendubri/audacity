@@ -32,7 +32,7 @@
 #include <wx/intl.h>
 
 #include <locale.h> // for setlocale and LC_ALL
-#include <math.h>
+#include <cmath>
 #include <wx/log.h>
 
 // ----------------------------------------------------------------------------
@@ -88,8 +88,10 @@ bool NumberFormatter::GetThousandsSeparatorIfUsed(wxChar *sep)
 // Conversion to string and helpers
 // ----------------------------------------------------------------------------
 
-wxString NumberFormatter::PostProcessIntString(wxString s, int style)
+wxString NumberFormatter::PostProcessIntString(const wxString &sArg, int style)
 {
+   wxString s(sArg);
+
     if ( style & Style_WithThousandsSep )
         AddThousandsSeparators(s);
 
@@ -132,11 +134,11 @@ wxString NumberFormatter::ToString(double val, int precision, int style)
         format.Printf(wxT("%%.%df"), precision);
     }
 
-    if (isnan(val))
+    if (std::isnan(val))
     {
         return _("NaN");
     }
-    if (isinf(val))
+    if (std::isinf(val))
     {
         return _("-Infinity");
     }
@@ -226,24 +228,29 @@ void NumberFormatter::RemoveThousandsSeparators(wxString& s)
     s.Replace(wxString(thousandsSep), wxString());
 }
 
-bool NumberFormatter::FromString(wxString s, long *val)
+bool NumberFormatter::FromString(const wxString &sArg, long *val)
 {
-    RemoveThousandsSeparators(s);
-    return s.ToLong(val);
+   wxString s(sArg);
+   RemoveThousandsSeparators(s);
+   return s.ToLong(val);
 }
 
 #ifdef HAS_LONG_LONG_T_DIFFERENT_FROM_LONG
 
-bool NumberFormatter::FromString(wxString s, wxLongLong_t *val)
+bool NumberFormatter::FromString(const wxString &sArg, wxLongLong_t *val)
 {
-    RemoveThousandsSeparators(s);
-    return s.ToLongLong(val);
+   wxString s(sArg);
+
+   RemoveThousandsSeparators(s);
+   return s.ToLongLong(val);
 }
 
 #endif // HAS_LONG_LONG_T_DIFFERENT_FROM_LONG
 
-bool NumberFormatter::FromString(wxString s, double *val)
+bool NumberFormatter::FromString(const wxString &sArg, double *val)
 {
-    RemoveThousandsSeparators(s);
-    return s.ToDouble(val);
+   wxString s(sArg);
+
+   RemoveThousandsSeparators(s);
+   return s.ToDouble(val);
 }

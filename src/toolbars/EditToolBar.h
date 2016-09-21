@@ -58,7 +58,7 @@ enum {
    ETBNumButtons
 };
 
-class EditToolBar:public ToolBar {
+class EditToolBar final : public ToolBar {
 
  public:
 
@@ -83,7 +83,7 @@ class EditToolBar:public ToolBar {
 
    void MakeButtons();
 
-   void RegenerateTooltips();
+   void RegenerateTooltips() override;
 
    AButton *mButtons[ETBNumButtons];
 
@@ -93,8 +93,8 @@ class EditToolBar:public ToolBar {
 
  public:
 
-   DECLARE_CLASS(EditToolBar);
-   DECLARE_EVENT_TABLE();
+   DECLARE_CLASS(EditToolBar)
+   DECLARE_EVENT_TABLE()
 };
 
 #endif

@@ -57,7 +57,7 @@ public:
       stMel,
       stBark,
       stErb,
-      stUndertone,
+      stPeriod,
 
       stNumScaleTypes,
    };
@@ -87,24 +87,12 @@ public:
 
    // If "bins" is false, units are Hz
    NumberScale GetScale
-      (double rate, bool bins) const;
+      (float minFreq, float maxFreq, double rate, bool bins) const;
 
-private:
    int minFreq;
    int maxFreq;
-   int logMinFreq;
-   int logMaxFreq;
-public:
-   int GetMinFreq(double rate) const;
-   int GetMaxFreq(double rate) const;
-   int GetLogMinFreq(double rate) const;
-   int GetLogMaxFreq(double rate) const;
-   bool SpectralSelectionEnabled() const;
 
-   void SetMinFreq(int freq);
-   void SetMaxFreq(int freq);
-   void SetLogMinFreq(int freq);
-   void SetLogMaxFreq(int freq);
+   bool SpectralSelectionEnabled() const;
 
 public:
    int range;
@@ -112,12 +100,20 @@ public:
    int frequencyGain;
 
    int windowType;
+
+private:
    int windowSize;
+public:
+   size_t WindowSize() const { return windowSize; }
+
 #ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
+private:
    int zeroPaddingFactor;
+public:
+   size_t ZeroPaddingFactor() const { return zeroPaddingFactor; }
 #endif
 
-   int GetFFTLength() const; // window size (times zero padding, if STFT)
+   size_t GetFFTLength() const; // window size (times zero padding, if STFT)
 
    bool isGrayscale;
 
@@ -149,15 +145,12 @@ public:
 
    // Following fields are derived from preferences.
 
-#ifdef EXPERIMENTAL_USE_REALFFTF
    // Variables used for computing the spectrum
-   mutable FFTParam      *hFFT;
-   mutable float         *window;
+   mutable FFTParam      *hFFT{};
+   mutable float         *window{};
 
    // Two other windows for computing reassigned spectrogram
-   mutable float         *tWindow; // Window times time parameter
-   mutable float         *dWindow; // Derivative of window
-
-#endif
+   mutable float         *tWindow{}; // Window times time parameter
+   mutable float         *dWindow{}; // Derivative of window
 };
 #endif

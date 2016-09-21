@@ -70,12 +70,10 @@ WaveformSettings& WaveformSettings::defaults()
    return instance;
 }
 
-bool WaveformSettings::Validate(bool quiet)
+bool WaveformSettings::Validate(bool /* quiet */)
 {
-   quiet;
-
    scaleType = ScaleType(
-      std::max(0, std::min(int(stNumScaleTypes) - 1, int(scaleType)))
+      std::max(0, std::min((int)(stNumScaleTypes) - 1, (int)(scaleType)))
    );
 
    ConvertToEnumeratedDBRange();
@@ -127,9 +125,9 @@ void WaveformSettings::ConvertToActualDBRange()
    wxArrayString codes;
    GUIPrefs::GetRangeChoices(NULL, &codes);
    long value = 0;
-   codes[std::max(0, std::min(int(codes.size()) - 1, dBRange))]
+   codes[std::max(0, std::min((int)(codes.size()) - 1, dBRange))]
       .ToLong(&value);
-   dBRange = int(value);
+   dBRange = (int)(value);
 }
 
 void WaveformSettings::NextLowerDBRange()
@@ -149,9 +147,9 @@ void WaveformSettings::NextHigherDBRange()
 //static
 const wxArrayString &WaveformSettings::GetScaleNames()
 {
-   class ScaleNamesArray : public TranslatableStringArray
+   class ScaleNamesArray final : public TranslatableStringArray
    {
-      virtual void Populate()
+      void Populate() override
       {
          // Keep in correspondence with enum WaveTrack::WaveTrackDisplay:
          mContents.Add(_("Linear"));

@@ -16,10 +16,10 @@
 
 
   JKC: This file solves a problem of how to avoid forking the
-  code base when working on new features e.g:
+  code base when working on NEW features e.g:
     - Additional displays in Audacity
     - Modular architecture.
-  Add #defines in here for the new features, and make your code
+  Add #defines in here for the NEW features, and make your code
   conditional on those #defines.
 
   All the #defines are positive, i.e., when defined,
@@ -42,7 +42,7 @@
 #define EXPERIMENTAL_SCIENCE_FILTERS
 
 // LLL, 01 Oct 2013:
-// new key assignment view for preferences
+// NEW key assignment view for preferences
 #define EXPERIMENTAL_KEY_VIEW
 
 // feature to link audio tracks to a label track
@@ -107,10 +107,6 @@
 // Paul Licameli (PRL) 29 Nov 2014
 // #define EXPERIMENTAL_IMPROVED_SEEKING
 
-// Philip Van Baren 01 July 2009
-// Replace RealFFT() and PowerSpectrum function to use (faster) RealFFTf function
-#define EXPERIMENTAL_USE_REALFFTF
-
 // RBD, 1 Sep 2008
 // Enables MIDI Output of NoteTrack (MIDI) data during playback
 // USE_MIDI must be defined in order for EXPERIMENTAL_MIDI_OUT to work
@@ -160,7 +156,7 @@
 // Define to enable the device change handler
 //#define EXPERIMENTAL_DEVICE_CHANGE_HANDLER
 
-// Define for new noise reduction effect from Paul Licameli.
+// Define for NEW noise reduction effect from Paul Licameli.
 #define EXPERIMENTAL_NOISE_REDUCTION
 
 // Define to enable Nyquist audio clip boundary control (Steve Daulton Dec 2014)
@@ -173,7 +169,6 @@
    // The following enable parts of the scrubbing user interface.
    #define EXPERIMENTAL_SCRUBBING_BASIC
    #ifdef EXPERIMENTAL_SCRUBBING_BASIC
-      #define EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
       #define EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
    #endif
 #endif
@@ -200,6 +195,5 @@
 // Zero-padding factor for spectrograms can smooth the display of spectrograms by
 // interpolating in frequency domain.
 #define EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
-
 
 #endif

@@ -35,6 +35,7 @@ effects.
 
 WX_DEFINE_USER_EXPORTED_ARRAY(Effect *, EffectArray, class AUDACITY_DLL_API);
 WX_DECLARE_STRING_HASH_MAP_WITH_DECL(Effect *, EffectMap, class AUDACITY_DLL_API);
+WX_DECLARE_STRING_HASH_MAP_WITH_DECL(std::shared_ptr<Effect>, EffectOwnerMap, class AUDACITY_DLL_API);
 
 #if defined(EXPERIMENTAL_EFFECTS_RACK)
 class EffectRack;
@@ -91,19 +92,23 @@ public:
    wxString GetDefaultPreset(const PluginID & ID);
    void SetBatchProcessing(const PluginID & ID, bool start);
 
-      // Realtime effect processing
+   /** Allow effects to disable saving the state at run time */
+   void SetSkipStateFlag(bool flag);
+   bool GetSkipStateFlag();
+
+   // Realtime effect processing
    bool RealtimeIsActive();
    bool RealtimeIsSuspended();
    void RealtimeAddEffect(Effect *effect);
    void RealtimeRemoveEffect(Effect *effect);
    void RealtimeSetEffects(const EffectArray & mActive);
    void RealtimeInitialize();
-   void RealtimeAddProcessor(int group, int chans, float rate);
+   void RealtimeAddProcessor(int group, unsigned chans, float rate);
    void RealtimeFinalize();
    void RealtimeSuspend();
    void RealtimeResume();
    void RealtimeProcessStart();
-   sampleCount RealtimeProcess(int group, int chans, float **buffers, sampleCount numSamples);
+   size_t RealtimeProcess(int group, unsigned chans, float **buffers, size_t numSamples);
    void RealtimeProcessEnd();
    int GetRealtimeLatency();
 
@@ -123,7 +128,7 @@ private:
 
 private:
    EffectMap mEffects;
-   EffectMap mHostEffects;
+   EffectOwnerMap mHostEffects;
 
    int mNumEffects;
 
@@ -132,8 +137,12 @@ private:
    int mRealtimeLatency;
    bool mRealtimeSuspended;
    bool mRealtimeActive;
-   wxArrayInt mRealtimeChans;
+   std::vector<unsigned> mRealtimeChans;
    wxArrayDouble mRealtimeRates;
+
+   // Set true if we want to skip pushing state 
+   // after processing at effect run time.
+   bool mSkipStateFlag;
 
 #if defined(EXPERIMENTAL_EFFECTS_RACK)
    EffectRack *mRack;

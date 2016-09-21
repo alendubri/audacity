@@ -21,7 +21,7 @@
   Preference field specification:
    /
       Version					- Audacity Version that created these prefs
-      DefaultOpenPath			- Default directory for new file selector
+      DefaultOpenPath			- Default directory for NEW file selector
    /FileFormats
       CopyOrEditUncompressedData - Copy data from uncompressed files or
          [ "copy", "edit"]   - edit in place?
@@ -67,6 +67,7 @@
 
 #include "Prefs.h"
 
+std::unique_ptr<wxFileConfig> ugPrefs {};
 wxFileConfig *gPrefs = NULL;
 int gMenusDirty = 0;
 
@@ -101,6 +102,7 @@ static void CopyEntry(wxString path, wxConfigBase *src, wxConfigBase *dst, wxStr
    }
 }
 
+#if 0
 // Recursive routine to copy all groups and entries from one wxConfig object to another
 static void CopyEntriesRecursive(wxString path, wxConfigBase *src, wxConfigBase *dst)
 {
@@ -127,6 +129,7 @@ static void CopyEntriesRecursive(wxString path, wxConfigBase *src, wxConfigBase 
       groupKeepGoing = src->GetNextGroup(groupName, groupIndex);
    }
 }
+#endif
 
 void InitPreferences()
 {
@@ -134,9 +137,11 @@ void InitPreferences()
 
    wxFileName configFileName(FileNames::DataDir(), wxT("audacity.cfg"));
 
-   gPrefs = new wxFileConfig(appName, wxEmptyString,
-                             configFileName.GetFullPath(),
-                             wxEmptyString, wxCONFIG_USE_LOCAL_FILE);
+   ugPrefs = std::make_unique<wxFileConfig>
+      (appName, wxEmptyString,
+       configFileName.GetFullPath(),
+       wxEmptyString, wxCONFIG_USE_LOCAL_FILE);
+   gPrefs = ugPrefs.get();
 
    wxConfigBase::Set(gPrefs);
 
@@ -144,12 +149,14 @@ void InitPreferences()
    wxString langCode = gPrefs->Read(wxT("/Locale/Language"), wxEmptyString);
    bool writeLang = false;
 
-   wxFileName fn(wxStandardPaths::Get().GetResourcesDir(), wxT("FirstTime.ini"));
+   const wxFileName fn(wxStandardPaths::Get().GetResourcesDir(), wxT("FirstTime.ini"));
    if (fn.FileExists())   // it will exist if the (win) installer put it there
    {
+      const wxString fullPath{fn.GetFullPath()};
+
       wxFileConfig ini(wxEmptyString,
                        wxEmptyString,
-                       fn.GetFullPath(),
+                       fullPath,
                        wxEmptyString,
                        wxCONFIG_USE_LOCAL_FILE);
 
@@ -167,11 +174,10 @@ void InitPreferences()
 
       ini.Read(wxT("/FromInno/ResetPrefs"), &resetPrefs, false);
 
-      bool gone = wxRemoveFile(fn.GetFullPath());  // remove FirstTime.ini
+      bool gone = wxRemoveFile(fullPath);  // remove FirstTime.ini
       if (!gone)
       {
-         wxString fileName = fn.GetFullPath();
-         wxMessageBox(wxString::Format( _("Failed to remove %s"), fileName.c_str()), _("Failed!"));
+         wxMessageBox(wxString::Format(_("Failed to remove %s"), fullPath.c_str()), _("Failed!"));
       }
    }
 
@@ -182,7 +188,7 @@ void InitPreferences()
    }
 
    // Initialize the language
-   wxGetApp().InitLang(langCode);
+   langCode = wxGetApp().InitLang(langCode);
 
    // User requested that the preferences be completely reset
    if (resetPrefs)
@@ -250,7 +256,7 @@ void InitPreferences()
 
    // In 2.1.0, the Meter toolbar was split and lengthened, but strange arrangements happen
    // if upgrading due to the extra length.  So, if a user is upgrading, use the pre-2.1.0
-   // lengths, but still use the new split versions.
+   // lengths, but still use the NEW split versions.
    if (gPrefs->Exists(wxT("/GUI/ToolBars/Meter")) &&
       !gPrefs->Exists(wxT("/GUI/ToolBars/CombinedMeter"))) {
 
@@ -264,7 +270,7 @@ void InitPreferences()
       gPrefs->Read(wxT("/GUI/ToolBars/Meter/W"), &w, -1);
       gPrefs->Read(wxT("/GUI/ToolBars/Meter/H"), &h, -1);
 
-      // "Order" must be adjusted since we're inserting two new toolbars
+      // "Order" must be adjusted since we're inserting two NEW toolbars
       if (dock > 0) {
          wxString oldPath = gPrefs->GetPath();
          gPrefs->SetPath(wxT("/GUI/ToolBars"));
@@ -317,7 +323,7 @@ void FinishPreferences()
 {
    if (gPrefs) {
       wxConfigBase::Set(NULL);
-      delete gPrefs;
+      ugPrefs.reset();
       gPrefs = NULL;
    }
 }

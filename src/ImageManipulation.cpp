@@ -24,13 +24,14 @@ channel.  This collection of functions fills that gap.
 
 #include <wx/image.h>
 
+#include "Audacity.h"
 #include "ImageManipulation.h"
 
 /// This looks at the first pixel in the image, and shifts
 /// the entire image by the vector difference between that
 /// pixel and the dstColour.  For better control, use
 /// ChangeImageColour(wxImage, wxColour*, wxColour*) below
-wxImage *ChangeImageColour(wxImage * srcImage, wxColour & dstColour)
+std::unique_ptr<wxImage> ChangeImageColour(wxImage * srcImage, wxColour & dstColour)
 {
    unsigned char *src = srcImage->GetData();
    wxColour c;
@@ -40,14 +41,14 @@ wxImage *ChangeImageColour(wxImage * srcImage, wxColour & dstColour)
 
 ///This will explicitly shift the image color from
 ///srcColour to dstColour.
-wxImage *ChangeImageColour(wxImage * srcImage,
+std::unique_ptr<wxImage> ChangeImageColour(wxImage * srcImage,
                            wxColour & srcColour,
                            wxColour & dstColour)
 {
    // This function takes a source image, which it assumes to
    // be grayscale, and smoothly changes the overall color
    // to the specified color, and returns the result as a
-   // new image.  This works well for grayscale 3D images.
+   // NEW image.  This works well for grayscale 3D images.
    // Audacity uses this routines to make the buttons
    // (skip-start, play, stop, record, skip-end) adapt to
    // the color scheme of the user.
@@ -56,7 +57,7 @@ wxImage *ChangeImageColour(wxImage * srcImage,
    int width = srcImage->GetWidth();
    int height = srcImage->GetHeight();
 
-   wxImage * dstImage = new wxImage(width, height);
+   auto dstImage = std::make_unique<wxImage>(width, height);
    unsigned char *dst = dstImage->GetData();
 
 
@@ -95,10 +96,10 @@ wxImage *ChangeImageColour(wxImage * srcImage,
 
 /// Takes a background image, foreground image, and mask
 /// (i.e. the alpha channel for the foreground), and
-/// returns an new image where the foreground has been
+/// returns an NEW image where the foreground has been
 /// overlaid onto the background using alpha-blending,
 /// at location (xoff, yoff).
-wxImage *OverlayImage(wxImage * background, wxImage * foreground,
+std::unique_ptr<wxImage> OverlayImage(wxImage * background, wxImage * foreground,
                       wxImage * mask, int xoff, int yoff)
 {
    unsigned char *bg = background->GetData();
@@ -129,8 +130,8 @@ wxImage *OverlayImage(wxImage * background, wxImage * foreground,
    hCutoff = (bgHeight - yoff > hCutoff) ? hCutoff : bgHeight - yoff;
 
 
-   //Make a new image the size of the background
-   wxImage * dstImage = new wxImage(bgWidth, bgHeight);
+   //Make a NEW image the size of the background
+   auto dstImage = std::make_unique<wxImage>(bgWidth, bgHeight);
    unsigned char *dst = dstImage->GetData();
    memcpy(dst, bg, bgWidth * bgHeight * 3);
 
@@ -161,10 +162,10 @@ wxImage *OverlayImage(wxImage * background, wxImage * foreground,
 
 /// Takes a background image, foreground image, and mask
 /// (i.e. the alpha channel for the foreground), and
-/// returns an new image where the foreground has been
+/// returns an NEW image where the foreground has been
 /// overlaid onto the background using alpha-blending,
 /// at location (xoff, yoff).
-wxImage *OverlayImage(teBmps eBack, teBmps eForeground,
+std::unique_ptr<wxImage> OverlayImage(teBmps eBack, teBmps eForeground,
                       int xoff, int yoff)
 {
    wxImage imgBack(theTheme.Image( eBack       ));
@@ -174,7 +175,7 @@ wxImage *OverlayImage(teBmps eBack, teBmps eForeground,
    // TMP: dmazzoni - just so the code runs even though not all of
    // our images have transparency...
    if (!imgFore.HasAlpha())
-      return new wxImage(imgBack);
+      return std::make_unique<wxImage>(imgBack);
 
 
    wxASSERT( imgFore.HasAlpha() );
@@ -204,8 +205,8 @@ wxImage *OverlayImage(teBmps eBack, teBmps eForeground,
    wCutoff = (bgWidth - xoff > wCutoff) ? wCutoff : bgWidth - xoff;
    hCutoff = (bgHeight - yoff > hCutoff) ? hCutoff : bgHeight - yoff;
 
-   //Make a new image the size of the background
-   wxImage * dstImage = new wxImage(bgWidth, bgHeight);
+   //Make a NEW image the size of the background
+   auto dstImage = std::make_unique<wxImage>(bgWidth, bgHeight);
    unsigned char *dst = dstImage->GetData();
    memcpy(dst, bg, bgWidth * bgHeight * 3);
 
@@ -234,9 +235,9 @@ wxImage *OverlayImage(teBmps eBack, teBmps eForeground,
 }
 
 // Creates an image with a solid background color
-wxImage *CreateBackground(int width, int height, wxColour colour)
+std::unique_ptr<wxImage> CreateBackground(int width, int height, wxColour colour)
 {
-   wxImage *i = new wxImage(width, height);
+   auto i = std::make_unique<wxImage>(width, height);
    unsigned char *ip;
    int srcVal[3];
    int x;
@@ -257,9 +258,9 @@ wxImage *CreateBackground(int width, int height, wxColour colour)
 
 // Creates an image with the Mac OS X Aqua stripes, to be used
 // as a background
-wxImage *CreateAquaBackground(int width, int height, int offset)
+std::unique_ptr<wxImage> CreateAquaBackground(int width, int height, int offset)
 {
-   wxImage *image = new wxImage(width, height);
+   auto image = std::make_unique<wxImage>(width, height);
    unsigned char *ip = image->GetData();
    unsigned char val[4] = {231, 239, 255, 239};
    unsigned char v;
@@ -274,10 +275,11 @@ wxImage *CreateAquaBackground(int width, int height, int offset)
    return image;
 }
 
+std::unique_ptr<wxImage> CreateSysBackground
 #ifdef USE_AQUA_THEME
-wxImage *CreateSysBackground(int width, int height, int offset, wxColour colour)
+   (int width, int height, int offset, wxColour colour)
 #else
-wxImage *CreateSysBackground(int width, int height, int WXUNUSED(offset), wxColour colour)
+   (int width, int height, int WXUNUSED(offset), wxColour colour)
 #endif
 {
    #ifdef USE_AQUA_THEME

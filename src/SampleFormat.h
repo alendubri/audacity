@@ -29,7 +29,7 @@ typedef enum {
 } sampleFormat;
 
 /** \brief Return the size (in memory) of one sample (bytes) */
-#define SAMPLE_SIZE(SampleFormat) (SampleFormat >> 16)
+#define SAMPLE_SIZE(SampleFormat) ( size_t{ (SampleFormat) >> 16 } )
 #endif
 
 // Used to determine how to fill in empty areas of audio.
@@ -39,8 +39,8 @@ typedef enum {
 }fillFormat;
 
 /** \brief Return the size on disk of one uncompressed sample (bytes) */
-#define SAMPLE_SIZE_DISK(SampleFormat) ((SampleFormat == int24Sample) ? \
-   3 : SAMPLE_SIZE(SampleFormat) )
+#define SAMPLE_SIZE_DISK(SampleFormat) (((SampleFormat) == int24Sample) ? \
+   size_t{ 3 } : SAMPLE_SIZE(SampleFormat) )
 
 const wxChar *GetSampleFormatStr(sampleFormat format);
 
@@ -48,7 +48,7 @@ const wxChar *GetSampleFormatStr(sampleFormat format);
 // Allocating/Freeing Samples
 //
 
-AUDACITY_DLL_API samplePtr NewSamples(int count, sampleFormat format);
+AUDACITY_DLL_API samplePtr NewSamples(size_t count, sampleFormat format);
 AUDACITY_DLL_API void DeleteSamples(samplePtr p);
 
 // RAII version of above
@@ -56,10 +56,10 @@ class SampleBuffer {
 
 public:
    SampleBuffer()
-      : mCount(0), mPtr(0)
+      : mPtr(0)
    {}
-   SampleBuffer(int count, sampleFormat format)
-      : mCount(count), mPtr(NewSamples(mCount, format))
+   SampleBuffer(size_t count, sampleFormat format)
+      : mPtr(NewSamples(count, format))
    {}
    ~SampleBuffer()
    {
@@ -67,28 +67,59 @@ public:
    }
 
    // WARNING!  May not preserve contents.
-   void Resize(int count, sampleFormat format)
+   SampleBuffer &Allocate(size_t count, sampleFormat format)
    {
-      if (mCount < count) {
-         Free();
-         mPtr = NewSamples(count, format);
-         mCount = count;
-      }
+      Free();
+      mPtr = NewSamples(count, format);
+      return *this;
    }
+
 
    void Free()
    {
       DeleteSamples(mPtr);
       mPtr = 0;
-      mCount = 0;
    }
 
    samplePtr ptr() const { return mPtr; }
 
 
 private:
-   int mCount;
    samplePtr mPtr;
+};
+
+class GrowableSampleBuffer : private SampleBuffer
+{
+public:
+   GrowableSampleBuffer()
+      : SampleBuffer()
+      , mCount(0)
+   {}
+
+   GrowableSampleBuffer(size_t count, sampleFormat format)
+      : SampleBuffer(count, format)
+      , mCount(count)
+   {}
+
+   GrowableSampleBuffer &Resize(size_t count, sampleFormat format)
+   {
+      if (!ptr() || mCount < count) {
+         Allocate(count, format);
+         mCount = count;
+      }
+      return *this;
+   }
+
+   void Free()
+   {
+      SampleBuffer::Free();
+      mCount = 0;
+   }
+
+   using SampleBuffer::ptr;
+
+private:
+   size_t mCount;
 };
 
 //
@@ -108,13 +139,13 @@ void      CopySamplesNoDither(samplePtr src, sampleFormat srcFormat,
                       unsigned int dstStride=1);
 
 void      ClearSamples(samplePtr buffer, sampleFormat format,
-                       int start, int len);
+                       size_t start, size_t len);
 
 void      ReverseSamples(samplePtr buffer, sampleFormat format,
                          int start, int len);
 
 //
-// This must be called on startup and everytime new ditherers
+// This must be called on startup and everytime NEW ditherers
 // are set in preferences.
 //
 

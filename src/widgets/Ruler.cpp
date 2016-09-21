@@ -66,6 +66,8 @@ array of Ruler::Label.
 #include <wx/menuitem.h>
 #include <wx/tooltip.h>
 
+#include "AButton.h"
+#include "../AColor.h"
 #include "../AudioIO.h"
 #include "../Internat.h"
 #include "../Project.h"
@@ -75,10 +77,17 @@ array of Ruler::Label.
 #include "../Experimental.h"
 #include "../TimeTrack.h"
 #include "../TrackPanel.h"
+#include "../TrackPanelCellIterator.h"
 #include "../Menus.h"
 #include "../NumberScale.h"
 #include "../Prefs.h"
 #include "../Snap.h"
+#include "../tracks/ui/Scrubbing.h"
+#include "../prefs/PlaybackPrefs.h"
+#include "../prefs/TracksPrefs.h"
+#include "../widgets/Grabber.h"
+
+//#define SCRUB_ABOVE
 
 using std::min;
 using std::max;
@@ -90,14 +99,14 @@ using std::max;
 #define PLAY_REGION_RECT_HEIGHT 3
 #define PLAY_REGION_GLOBAL_OFFSET_Y 7
 
-#define kTopInset 4
+wxColour Ruler::mTickColour{ 153, 153, 153 };
 
 //
 // Ruler
 //
 
 Ruler::Ruler()
-   : mpNumberScale(0)
+   : mpNumberScale{}
 {
    mMin = mHiddenMin = 0.0;
    mMax = mHiddenMax = 100.0;
@@ -116,7 +125,6 @@ Ruler::Ruler()
    mBottom = -1;
    mbTicksOnly = true;
    mbTicksAtExtremes = false;
-   mTickColour = wxColour(153,153,153);
    mPen.SetColour(mTickColour);
 
    // Note: the font size is now adjusted automatically whenever
@@ -129,9 +137,9 @@ Ruler::Ruler()
    fontSize = 8;
 #endif
 
-   mMinorMinorFont = new wxFont(fontSize - 1, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-   mMinorFont = new wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-   mMajorFont = new wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+   mMinorMinorFont = std::make_unique<wxFont>(fontSize - 1, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+   mMinorFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+   mMajorFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
 
    mUserFonts = false;
 
@@ -155,7 +163,7 @@ Ruler::Ruler()
 
    mTwoTone = false;
 
-   mUseZoomInfo = false;
+   mUseZoomInfo = NULL;
 }
 
 Ruler::~Ruler()
@@ -163,9 +171,6 @@ Ruler::~Ruler()
    Invalidate();  // frees up our arrays
    if( mUserBits )
       delete [] mUserBits;//JKC
-   delete mMinorFont;
-   delete mMajorFont;
-   delete mMinorMinorFont;
 
    if (mMajorLabels)
       delete[] mMajorLabels;
@@ -173,8 +178,6 @@ Ruler::~Ruler()
       delete[] mMinorLabels;
    if (mMinorMinorLabels)
       delete[] mMinorMinorLabels;
-
-   delete mpNumberScale;
 }
 
 void Ruler::SetTwoTone(bool twoTone)
@@ -204,7 +207,7 @@ void Ruler::SetLog(bool log)
    }
 }
 
-void Ruler::SetUnits(wxString units)
+void Ruler::SetUnits(const wxString &units)
 {
    // Specify the name of the units (like "dB") if you
    // want numbers like "1.6" formatted as "1.6 dB".
@@ -315,14 +318,13 @@ void Ruler::SetNumberScale(const NumberScale *pScale)
 {
    if (!pScale) {
       if (mpNumberScale) {
-         delete mpNumberScale;
+         mpNumberScale.reset();
          Invalidate();
       }
    }
    else {
       if (!mpNumberScale || *mpNumberScale != *pScale) {
-         delete mpNumberScale;
-         mpNumberScale = new NumberScale(*pScale);
+         mpNumberScale = std::make_unique<NumberScale>(*pScale);
          Invalidate();
       }
    }
@@ -970,11 +972,11 @@ void Ruler::Update()
   Update(NULL);
 }
 
-void Ruler::Update(TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, long maxSpeed )
+void Ruler::Update(const TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, long maxSpeed )
 {
    const ZoomInfo *zoomInfo = NULL;
-   if (mUseZoomInfo && !mLog && mOrientation == wxHORIZONTAL)
-      zoomInfo = &GetActiveProject()->GetZoomInfo();
+   if (!mLog && mOrientation == wxHORIZONTAL)
+      zoomInfo = mUseZoomInfo;
 
    // This gets called when something has been changed
    // (i.e. we've been invalidated).  Recompute all
@@ -989,15 +991,24 @@ void Ruler::Update(TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, lo
       wxString exampleText = wxT("0.9");   //ignored for height calcs on all platforms
       int desiredPixelHeight;
 
+
+      static const int MinPixelHeight = 10; // 8;
+      static const int MaxPixelHeight =
+#ifdef __WXMAC__
+            10
+#else
+            12
+#endif
+      ;
+
       if (mOrientation == wxHORIZONTAL)
          desiredPixelHeight = mBottom - mTop - 5; // height less ticks and 1px gap
       else
-         desiredPixelHeight = 12;   // why 12?  10 -> 12 seems to be max/min
+         desiredPixelHeight = MaxPixelHeight;
 
-      if (desiredPixelHeight < 10)//8)
-         desiredPixelHeight = 10;//8;
-      if (desiredPixelHeight > 12)
-         desiredPixelHeight = 12;
+      desiredPixelHeight =
+         std::max(MinPixelHeight, std::min(MaxPixelHeight,
+            desiredPixelHeight));
 
       // Keep making the font bigger until it's too big, then subtract one.
       mDC->SetFont(wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
@@ -1012,17 +1023,11 @@ void Ruler::Update(TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, lo
       mDC->GetTextExtent(exampleText, &strW, &strH, &strD, &strL);
       mLead = strL;
 
-      if (mMajorFont)
-         delete mMajorFont;
-      mMajorFont = new wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+      mMajorFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
 
-      if (mMinorFont)
-         delete mMinorFont;
-      mMinorFont = new wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+      mMinorFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 
-      if (mMinorMinorFont)
-         delete mMinorMinorFont;
-      mMinorMinorFont = new wxFont(fontSize - 1, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+      mMinorMinorFont = std::make_unique<wxFont>(fontSize - 1, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
    }
 
    // If ruler is being resized, we could end up with it being too small.
@@ -1109,7 +1114,7 @@ void Ruler::Update(TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, lo
       if (mMin * mMax < 0.0) {
          int mid;
          if (zoomInfo != NULL)
-            mid = int(zoomInfo->TimeToPosition(0.0, mLeftOffset));
+            mid = (int)(zoomInfo->TimeToPosition(0.0, mLeftOffset));
          else
             mid = (int)(mLength*(mMin / (mMin - mMax)) + 0.5);
          const int iMaxPos = (mOrientation == wxHORIZONTAL) ? mRight : mBottom - 5;
@@ -1235,8 +1240,8 @@ void Ruler::Update(TimeTrack* timetrack)// Envelope *speedEnv, long minSpeed, lo
       for (i = 0; i <= steps; i++) {
          // PRL:  Bug1038.  Don't label 1.6, rounded, as a duplicate tick for "2"
          if (!(mFormat == IntFormat && decade < 10.0)) {
-            for (int f = start; f != int(end); f += mstep) {
-               if (int(f / 10) != f / 10.0f) {
+            for (int f = start; f != (int)(end); f += mstep) {
+               if ((int)(f / 10) != f / 10.0f) {
                   val = decade * f / 10;
                   if (val >= rMin && val < rMax) {
                      const int pos(0.5 + mLength * numberScale.ValueToPosition(val));
@@ -1295,7 +1300,7 @@ void Ruler::Draw(wxDC& dc)
    Draw( dc, NULL);
 }
 
-void Ruler::Draw(wxDC& dc, TimeTrack* timetrack)
+void Ruler::Draw(wxDC& dc, const TimeTrack* timetrack)
 {
    mDC = &dc;
    if( mLength <=0 )
@@ -1544,7 +1549,7 @@ void Ruler::SetCustomMajorLabels(wxArrayString *label, int numLabel, int start, 
       mMajorLabels[i].text = label->Item(i);
       mMajorLabels[i].pos  = start + i*step;
    }
-   //Remember: delete majorlabels....
+   //Remember: DELETE majorlabels....
 }
 
 void Ruler::SetCustomMinorLabels(wxArrayString *label, int numLabel, int start, int step)
@@ -1558,7 +1563,7 @@ void Ruler::SetCustomMinorLabels(wxArrayString *label, int numLabel, int start, 
       mMinorLabels[i].text = label->Item(i);
       mMinorLabels[i].pos  = start + i*step;
    }
-   //Remember: delete majorlabels....
+   //Remember: DELETE majorlabels....
 }
 
 void Ruler::Label::Draw(wxDC&dc, bool twoTone) const
@@ -1568,7 +1573,7 @@ void Ruler::Label::Draw(wxDC&dc, bool twoTone) const
 
 #ifdef EXPERIMENTAL_THEMING
       // TODO:  handle color distinction
-      mDC->SetTextForeground(mTickColour);
+      dc.SetTextForeground(mTickColour);
 #else
       dc.SetTextForeground(altColor ? *wxBLUE : *wxBLACK);
 #endif
@@ -1577,28 +1582,28 @@ void Ruler::Label::Draw(wxDC&dc, bool twoTone) const
    }
 }
 
-void Ruler::SetUseZoomInfo(int leftOffset)
+void Ruler::SetUseZoomInfo(int leftOffset, const ZoomInfo *zoomInfo)
 {
    mLeftOffset = leftOffset;
-   mUseZoomInfo = true;
+   mUseZoomInfo = zoomInfo;
 }
 
 //
 // RulerPanel
 //
 
-BEGIN_EVENT_TABLE(RulerPanel, wxPanel)
+BEGIN_EVENT_TABLE(RulerPanel, wxPanelWrapper)
    EVT_ERASE_BACKGROUND(RulerPanel::OnErase)
    EVT_PAINT(RulerPanel::OnPaint)
    EVT_SIZE(RulerPanel::OnSize)
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(RulerPanel, wxPanel)
+IMPLEMENT_CLASS(RulerPanel, wxPanelWrapper)
 
 RulerPanel::RulerPanel(wxWindow* parent, wxWindowID id,
                        const wxPoint& pos /*= wxDefaultPosition*/,
                        const wxSize& size /*= wxDefaultSize*/):
-   wxPanel(parent, id, pos, size)
+   wxPanelWrapper(parent, id, pos, size)
 {
 }
 
@@ -1635,12 +1640,258 @@ void RulerPanel::DoSetSize(int x, int y,
                            int width, int height,
                            int sizeFlags)
 {
-   wxPanel::DoSetSize(x, y, width, height, sizeFlags);
+   wxPanelWrapper::DoSetSize(x, y, width, height, sizeFlags);
 
    int w, h;
    GetClientSize(&w, &h);
 
    ruler.SetBounds(0, 0, w-1, h-1);
+}
+
+
+/*********************************************************************/
+enum : int {
+   IndicatorSmallWidth = 9,
+   IndicatorMediumWidth = 13,
+   IndicatorOffset = 1,
+
+   TopMargin = 1,
+   BottomMargin = 2, // for bottom bevel and bottom line
+   LeftMargin = 1, 
+
+   RightMargin = 1,
+};
+
+enum {
+   ScrubHeight = 14,
+   ProperRulerHeight = 29
+};
+
+inline int IndicatorHeightForWidth(int width)
+{
+   return ((width / 2) * 3) / 2;
+}
+
+inline int IndicatorWidthForHeight(int height)
+{
+   // Not an exact inverse of the above, with rounding, but good enough
+   return std::max(static_cast<int>(IndicatorSmallWidth),
+                   (((height) * 2) / 3) * 2
+                   );
+}
+
+inline int IndicatorBigHeight()
+{
+   return std::max((int)(ScrubHeight - TopMargin),
+                   (int)(IndicatorMediumWidth));
+}
+
+inline int IndicatorBigWidth()
+{
+   return IndicatorWidthForHeight(IndicatorBigHeight());
+}
+
+/**********************************************************************
+
+QuickPlayRulerOverlay.
+Graphical helper for AdornedRulerPanel.
+
+**********************************************************************/
+
+class QuickPlayIndicatorOverlay;
+
+// This is an overlay drawn on the ruler.  It draws the little triangle or
+// the double-headed arrow.
+class QuickPlayRulerOverlay final : public Overlay
+{
+public:
+   QuickPlayRulerOverlay(QuickPlayIndicatorOverlay &partner);
+   virtual ~QuickPlayRulerOverlay();
+
+   void Update(wxCoord xx) { mNewQPIndicatorPos = xx; }
+
+private:
+   AdornedRulerPanel *GetRuler() const;
+
+   std::pair<wxRect, bool> DoGetRectangle(wxSize size) override;
+   void Draw(OverlayPanel &panel, wxDC &dc) override;
+
+   QuickPlayIndicatorOverlay &mPartner;
+   int mOldQPIndicatorPos { -1 }, mNewQPIndicatorPos { -1 };
+};
+
+/**********************************************************************
+
+ QuickPlayIndicatorOverlay.
+ Graphical helper for AdornedRulerPanel.
+
+ **********************************************************************/
+
+// This is an overlay drawn on a different window, the track panel.
+// It draws the pale guide line that follows mouse movement.
+class QuickPlayIndicatorOverlay final : public Overlay
+{
+   friend QuickPlayRulerOverlay;
+
+public:
+   QuickPlayIndicatorOverlay(AudacityProject *project);
+
+   virtual ~QuickPlayIndicatorOverlay();
+
+   void Update(int x, bool snapped = false, bool previewScrub = false);
+
+private:
+   std::pair<wxRect, bool> DoGetRectangle(wxSize size) override;
+   void Draw(OverlayPanel &panel, wxDC &dc) override;
+
+   AudacityProject *mProject;
+
+   std::unique_ptr<QuickPlayRulerOverlay> mPartner
+      { std::make_unique<QuickPlayRulerOverlay>(*this) };
+
+   int mOldQPIndicatorPos { -1 }, mNewQPIndicatorPos { -1 };
+   bool mOldQPIndicatorSnapped {}, mNewQPIndicatorSnapped {};
+   bool mOldPreviewingScrub {}, mNewPreviewingScrub {};
+};
+
+/**********************************************************************
+
+ Implementation of QuickPlayRulerOverlay.
+
+ **********************************************************************/
+
+QuickPlayRulerOverlay::QuickPlayRulerOverlay(QuickPlayIndicatorOverlay &partner)
+: mPartner(partner)
+{
+   GetRuler()->AddOverlay(this);
+}
+
+QuickPlayRulerOverlay::~QuickPlayRulerOverlay()
+{
+   auto ruler = GetRuler();
+   if (ruler)
+      ruler->RemoveOverlay(this);
+}
+
+AdornedRulerPanel *QuickPlayRulerOverlay::GetRuler() const
+{
+   return mPartner.mProject->GetRulerPanel();
+}
+
+std::pair<wxRect, bool> QuickPlayRulerOverlay::DoGetRectangle(wxSize /*size*/)
+{
+   const auto x = mOldQPIndicatorPos;
+   if (x >= 0) {
+      // These dimensions are always sufficient, even if a little
+      // excessive for the small triangle:
+      const int width = IndicatorBigWidth() * 3 / 2;
+      //const auto height = IndicatorHeightForWidth(width);
+
+      const int indsize = width / 2;
+
+      auto xx = x - indsize;
+      auto yy = 0;
+      return {
+         { xx, yy,
+            indsize * 2 + 1,
+            mPartner.mProject->GetRulerPanel()->GetSize().GetHeight() },
+         (x != mNewQPIndicatorPos)
+      };
+   }
+   else
+      return { {}, mNewQPIndicatorPos >= 0 };
+}
+
+void QuickPlayRulerOverlay::Draw(OverlayPanel & /*panel*/, wxDC &dc)
+{
+   mOldQPIndicatorPos = mNewQPIndicatorPos;
+   if (mOldQPIndicatorPos >= 0) {
+      auto ruler = GetRuler();
+      const auto &scrubber = mPartner.mProject->GetScrubber();
+      auto scrub =
+         ruler->mMouseEventState == AdornedRulerPanel::mesNone &&
+         (ruler->mPrevZone == AdornedRulerPanel::StatusChoice::EnteringScrubZone ||
+          (scrubber.HasStartedScrubbing()));
+      auto seek = scrub && (scrubber.Seeks() || scrubber.TemporarilySeeks());
+      auto width = scrub ? IndicatorBigWidth() : IndicatorSmallWidth;
+      ruler->DoDrawIndicator(&dc, mOldQPIndicatorPos, true, width, scrub, seek);
+   }
+}
+
+/**********************************************************************
+
+ Implementation of QuickPlayIndicatorOverlay.
+
+ **********************************************************************/
+
+QuickPlayIndicatorOverlay::QuickPlayIndicatorOverlay(AudacityProject *project)
+   : mProject(project)
+{
+   auto tp = mProject->GetTrackPanel();
+   tp->AddOverlay(this);
+}
+
+QuickPlayIndicatorOverlay::~QuickPlayIndicatorOverlay()
+{
+   auto tp = mProject->GetTrackPanel();
+   if (tp)
+      tp->RemoveOverlay(this);
+}
+
+void QuickPlayIndicatorOverlay::Update(int x, bool snapped, bool previewScrub)
+{
+   mNewQPIndicatorPos = x;
+   mPartner->Update(x);
+   mNewQPIndicatorSnapped = snapped;
+   mNewPreviewingScrub = previewScrub;
+}
+
+std::pair<wxRect, bool> QuickPlayIndicatorOverlay::DoGetRectangle(wxSize size)
+{
+   wxRect rect(mOldQPIndicatorPos, 0, 1, size.GetHeight());
+   return std::make_pair(
+      rect,
+      (mOldQPIndicatorPos != mNewQPIndicatorPos ||
+       mOldQPIndicatorSnapped != mNewQPIndicatorSnapped ||
+       mOldPreviewingScrub != mNewPreviewingScrub)
+   );
+}
+
+void QuickPlayIndicatorOverlay::Draw(OverlayPanel &panel, wxDC &dc)
+{
+   TrackPanel &tp = static_cast<TrackPanel&>(panel);
+   TrackPanelCellIterator begin(&tp, true);
+   TrackPanelCellIterator end(&tp, false);
+
+   mOldQPIndicatorPos = mNewQPIndicatorPos;
+   mOldQPIndicatorSnapped = mNewQPIndicatorSnapped;
+   mOldPreviewingScrub = mNewPreviewingScrub;
+
+   if (mOldQPIndicatorPos >= 0) {
+      mOldPreviewingScrub
+      ? AColor::IndicatorColor(&dc, true) // Draw green line for preview.
+      : mOldQPIndicatorSnapped
+        ? AColor::SnapGuidePen(&dc)
+        : AColor::Light(&dc, false)
+      ;
+
+      // Draw indicator in all visible tracks
+      for (; begin != end; ++begin)
+      {
+         TrackPanelCellIterator::value_type data(*begin);
+         Track *const pTrack = dynamic_cast<Track*>(data.first);
+         if (!pTrack)
+            continue;
+         const wxRect &rect = data.second;
+
+         // Draw the NEW indicator in its NEW location
+         AColor::Line(dc,
+            mOldQPIndicatorPos,
+            rect.GetTop(),
+            mOldQPIndicatorPos,
+            rect.GetBottom());
+      }
+   }
 }
 
 /**********************************************************************
@@ -1659,45 +1910,59 @@ enum {
    OnSyncQuickPlaySelID,
    OnTimelineToolTipID,
    OnAutoScrollID,
-   OnLockPlayRegionID
+   OnLockPlayRegionID,
+   OnScrubRulerID,
+
+   OnTogglePinnedStateID,
 };
 
-BEGIN_EVENT_TABLE(AdornedRulerPanel, wxPanel)
+BEGIN_EVENT_TABLE(AdornedRulerPanel, OverlayPanel)
    EVT_PAINT(AdornedRulerPanel::OnPaint)
    EVT_SIZE(AdornedRulerPanel::OnSize)
    EVT_MOUSE_EVENTS(AdornedRulerPanel::OnMouseEvents)
    EVT_MOUSE_CAPTURE_LOST(AdornedRulerPanel::OnCaptureLost)
+
+   // Context menu commands
    EVT_MENU(OnToggleQuickPlayID, AdornedRulerPanel::OnToggleQuickPlay)
    EVT_MENU(OnSyncQuickPlaySelID, AdornedRulerPanel::OnSyncSelToQuickPlay)
    EVT_MENU(OnTimelineToolTipID, AdornedRulerPanel::OnTimelineToolTips)
    EVT_MENU(OnAutoScrollID, AdornedRulerPanel::OnAutoScroll)
    EVT_MENU(OnLockPlayRegionID, AdornedRulerPanel::OnLockPlayRegion)
+   EVT_MENU(OnScrubRulerID, AdornedRulerPanel::OnToggleScrubRulerFromMenu)
+
+   // Pop up menus on Windows
+   EVT_CONTEXT_MENU(AdornedRulerPanel::OnContextMenu)
+
+   EVT_COMMAND( OnTogglePinnedStateID,
+               wxEVT_COMMAND_BUTTON_CLICKED,
+               AdornedRulerPanel::OnTogglePinnedState )
+
 END_EVENT_TABLE()
 
-AdornedRulerPanel::AdornedRulerPanel(AudacityProject* parent,
+AdornedRulerPanel::AdornedRulerPanel(AudacityProject* project,
+                                     wxWindow *parent,
                                      wxWindowID id,
                                      const wxPoint& pos,
                                      const wxSize& size,
                                      ViewInfo *viewinfo)
-:  wxPanel(parent, id, pos, size)
+:  OverlayPanel(parent, id, pos, size)
+, mProject(project)
+, mViewInfo(viewinfo)
 {
+   for (auto &button : mButtons)
+      button = nullptr;
+
    SetLabel( _("Timeline") );
    SetName(GetLabel());
    SetBackgroundStyle(wxBG_STYLE_PAINT);
-
-   mBack = new wxBitmap(1, 1);
-   mBackDC.SelectObject(*mBack);
 
    mCursorDefault = wxCursor(wxCURSOR_DEFAULT);
    mCursorHand = wxCursor(wxCURSOR_HAND);
    mCursorSizeWE = wxCursor(wxCURSOR_SIZEWE);
 
    mLeftOffset = 0;
-   mCurTime = -1;
    mIndTime = -1;
-   mIndType = -1;
-   mQuickPlayInd = false;
-   mLastQuickPlayX = -1;
+
    mPlayRegionStart = -1;
    mPlayRegionLock = false;
    mPlayRegionEnd = -1;
@@ -1707,25 +1972,13 @@ AdornedRulerPanel::AdornedRulerPanel(AudacityProject* parent,
    mMouseEventState = mesNone;
    mIsDragging = false;
 
-   mViewInfo = viewinfo;
-
    mOuter = GetClientRect();
 
-   mInner = mOuter;
-   mInner.x += 1;          // +1 for left bevel
-   mInner.y += 1;          // +1 for top bevel
-   mInner.width -= 2;      // -2 for left and right bevels
-   mInner.height -= 3;     // -3 for top and bottom bevels and bottom line
-
-   mRuler.SetUseZoomInfo(mLeftOffset);
-   mRuler.SetBounds(mInner.GetLeft(),
-                    mInner.GetTop(),
-                    mInner.GetRight(),
-                    mInner.GetBottom());
+   mRuler.SetUseZoomInfo(mLeftOffset, mViewInfo);
    mRuler.SetLabelEdges( false );
    mRuler.SetFormat( Ruler::TimeFormat );
 
-   mTracks = parent->GetTracks();
+   mTracks = project->GetTracks();
 
    mSnapManager = NULL;
    mIsSnapped = false;
@@ -1735,8 +1988,6 @@ AdornedRulerPanel::AdornedRulerPanel(AudacityProject* parent,
    mTimelineToolTip = !!gPrefs->Read(wxT("/QuickPlay/ToolTips"), 1L);
    mPlayRegionDragsSelection = (gPrefs->Read(wxT("/QuickPlay/DragSelection"), 0L) == 1)? true : false; 
    mQuickPlayEnabled = !!gPrefs->Read(wxT("/QuickPlay/QuickPlayEnabled"), 1L);
-
-   UpdatePrefs();
 
 #if wxUSE_TOOLTIPS
    wxToolTip::Enable(true);
@@ -1750,10 +2001,8 @@ AdornedRulerPanel::AdornedRulerPanel(AudacityProject* parent,
 
 AdornedRulerPanel::~AdornedRulerPanel()
 {
-   // Done with the snap manager
-   if (mSnapManager) {
-      delete mSnapManager;
-   }
+   if(HasCapture())
+      ReleaseMouse();
 
    wxTheApp->Disconnect(EVT_AUDIOIO_CAPTURE,
                         wxCommandEventHandler(AdornedRulerPanel::OnCapture),
@@ -1761,18 +2010,96 @@ AdornedRulerPanel::~AdornedRulerPanel()
                         this);
 }
 
+#if 1
+namespace {
+   static const wxChar *scrubEnabledPrefName = wxT("/QuickPlay/ScrubbingEnabled");
+
+   bool ReadScrubEnabledPref()
+   {
+      bool result {};
+      gPrefs->Read(scrubEnabledPrefName, &result, true);
+      return result;
+   }
+
+   void WriteScrubEnabledPref(bool value)
+   {
+      gPrefs->Write(scrubEnabledPrefName, value);
+   }
+}
+#endif
+
 void AdornedRulerPanel::UpdatePrefs()
 {
+   // Update button texts for language change
+   UpdateButtonStates();
+
 #ifdef EXPERIMENTAL_SCROLLING_LIMITS
 #ifdef EXPERIMENTAL_TWO_TONE_TIME_RULER
    {
       bool scrollBeyondZero = false;
-      gPrefs->Read(wxT("/GUI/ScrollBeyondZero"), &scrollBeyondZero, false);
+      gPrefs->Read(TracksPrefs::ScrollingPreferenceKey(), &scrollBeyondZero,
+                   TracksPrefs::ScrollingPreferenceDefault());
       mRuler.SetTwoTone(scrollBeyondZero);
    }
 #endif
 #endif
-   RegenerateTooltips();
+
+   mShowScrubbing = ReadScrubEnabledPref();
+   // Affected by the last
+   UpdateRects();
+   SetPanelSize();
+
+   RegenerateTooltips(mPrevZone);
+}
+
+void AdornedRulerPanel::ReCreateButtons()
+{
+   for (auto & button : mButtons) {
+      if (button)
+         button->Destroy();
+      button = nullptr;
+   }
+
+   size_t iButton = 0;
+   // Make the short row of time ruler pushbottons.
+   // Don't bother with sizers.  Their sizes and positions are fixed.
+   // Add a grabber converted to a spacer.
+   // This makes it visually clearer that the button is a button.
+
+   wxPoint position( 1, 0 );
+   Grabber * pGrabber = safenew Grabber(this, this->GetId());
+   pGrabber->SetAsSpacer( true );
+   //pGrabber->SetSize( 10, 27 ); // default is 10,27
+   pGrabber->SetPosition( position );
+
+   position.x = 12;
+
+   auto size = theTheme.ImageSize( bmpRecoloredUpSmall );
+   size.y = std::min(size.y, GetRulerHeight(false));
+
+   auto buttonMaker = [&]
+   (wxWindowID id, teBmps bitmap, bool toggle)
+   {
+      const auto button =
+      ToolBar::MakeButton(
+         this,
+         bmpRecoloredUpSmall, bmpRecoloredDownSmall, bmpRecoloredHiliteSmall,
+         bitmap, bitmap, bitmap,
+         id, position, toggle, size
+      );
+
+      position.x += size.GetWidth();
+      mButtons[iButton++] = button;
+      return button;
+   };
+   auto button = buttonMaker(OnTogglePinnedStateID, bmpPinnedPlayHead, true);
+   ToolBar::MakeAlternateImages(
+      *button, 1,
+      bmpRecoloredUpSmall, bmpRecoloredDownSmall, bmpRecoloredHiliteSmall,
+      bmpUnpinnedPlayHead, bmpUnpinnedPlayHead, bmpUnpinnedPlayHead,
+      size);
+
+   UpdateButtonStates();
 }
 
 void AdornedRulerPanel::InvalidateRuler()
@@ -1780,18 +2107,85 @@ void AdornedRulerPanel::InvalidateRuler()
    mRuler.Invalidate();
 }
 
-void AdornedRulerPanel::RegenerateTooltips()
+namespace {
+   const wxString StartScrubbingMessage(const Scrubber &/*scrubber*/)
+   {
+      /* i18n-hint: These commands assist the user in finding a sound by ear. ...
+       "Scrubbing" is variable-speed playback, ...
+       "Seeking" is normal speed playback but with skips
+       */
+#if 0
+      if(scrubber.Seeks())
+         return _("Click or drag to begin Seek");
+      else
+         return _("Click or drag to begin Scrub");
+#else
+      return _("Click & move to Scrub. Click & drag to Seek.");
+#endif
+   }
+
+   const wxString ContinueScrubbingMessage(const Scrubber &scrubber)
+   {
+      /* i18n-hint: These commands assist the user in finding a sound by ear. ...
+       "Scrubbing" is variable-speed playback, ...
+       "Seeking" is normal speed playback but with skips
+       */
+#if 0
+      if(scrubber.Seeks())
+         return _("Move to Seek");
+      else
+         return _("Move to Scrub");
+#else
+      wxMouseState State = wxGetMouseState();
+      if( State.LeftIsDown() ) {
+         // Since mouse is down, mention dragging first.
+         // IsScrubbing is true if Scrubbing OR seeking.
+         if( scrubber.IsOneShotSeeking() )
+            return _("Drag to Seek.  Release to stop seeking.");
+         else 
+            return _("Drag to Seek.  Release and move to Scrub.");
+      }
+      // Since mouse is up, mention moving first.
+      return _("Move to Scrub. Drag to Seek.");
+#endif
+   }
+
+   const wxString ScrubbingMessage(const Scrubber &scrubber)
+   {
+      if (scrubber.HasStartedScrubbing())
+         return ContinueScrubbingMessage(scrubber);
+      else
+         return StartScrubbingMessage(scrubber);
+   }
+}
+
+void AdornedRulerPanel::RegenerateTooltips(StatusChoice choice)
 {
 #if wxUSE_TOOLTIPS
    if (mTimelineToolTip) {
       if (mIsRecording) {
          this->SetToolTip(_("Timeline actions disabled during recording"));
       }
-      else if (!mQuickPlayEnabled) {
-         this->SetToolTip(_("Quick-Play disabled"));
-      }
       else {
-         this->SetToolTip(_("Quick-Play enabled"));
+         switch(choice) {
+         case StatusChoice::EnteringQP :
+            if (!mQuickPlayEnabled) {
+               this->SetToolTip(_("Quick-Play disabled"));
+            }
+            else {
+               this->SetToolTip(_("Quick-Play enabled"));
+            }
+            break;
+         case StatusChoice::EnteringScrubZone :
+         {
+            const auto message = ScrubbingMessage(mProject->GetScrubber());
+            this->SetToolTip(message);
+         }
+            break;
+         default:
+            this->SetToolTip(NULL);
+            break;
+         }
       }
    }
    else {
@@ -1810,59 +2204,56 @@ void AdornedRulerPanel::OnCapture(wxCommandEvent & evt)
       // if recording is initiated by a modal window (Timer Record).
       SetCursor(mCursorDefault);
       mIsRecording = true;
+
+      // The quick play indicator is useless during recording
+      HideQuickPlayIndicator();
    }
    else {
       SetCursor(mCursorHand);
       mIsRecording = false;
    }
-   RegenerateTooltips();
+   RegenerateTooltips(mPrevZone);
 }
 
 void AdornedRulerPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
 {
+   if (mNeedButtonUpdate) {
+      // Visit this block once only in the lifetime of this panel
+      mNeedButtonUpdate = false;
+      // Do this first time setting of button status texts
+      // when we are sure the CommandManager is initialized.
+      ReCreateButtons();
+      // Sends a resize event, which will cause a second paint.
+      UpdatePrefs();
+   }
+
    wxPaintDC dc(this);
 
-   if (mBack)
-   {
-      mBackDC.SelectObject(wxNullBitmap);
-      delete mBack;
-   }
-      
-   wxSize sz = GetClientSize();
-   mBack = new wxBitmap();
-   mBack->Create(sz.x, sz.y, dc);
-   mBackDC.SelectObject(*mBack);
+   auto &backDC = GetBackingDCForRepaint();
 
-   DoDrawBorder(&mBackDC);
+   DoDrawBackground(&backDC);
 
    if (!mViewInfo->selectedRegion.isPoint())
    {
-      DoDrawSelection(&mBackDC);
+      DoDrawSelection(&backDC);
    }
 
-   DoDrawMarks(&mBackDC, true);
+   DoDrawMarks(&backDC, true);
 
-   if (mIndType >= 0)
-   {
-      DoDrawIndicator(&mBackDC);
-   }
+   DoDrawPlayRegion(&backDC);
 
-   if (mViewInfo->selectedRegion.isPoint())
-   {
-      DoDrawCursor(&mBackDC);
-   }
+   DoDrawEdge(&backDC);
 
-   DoDrawPlayRegion(&mBackDC);
+   DisplayBitmap(dc);
 
-   dc.Blit(0, 0, mBack->GetWidth(), mBack->GetHeight(), &mBackDC, 0, 0);
-
-   if (mQuickPlayInd)
-   {
-      DrawQuickPlayIndicator(&dc);
-   }
+   // Stroke extras direct to the client area,
+   // maybe outside of the damaged area
+   // As with TrackPanel, do not make a NEW wxClientDC or else Mac flashes badly!
+   dc.DestroyClippingRegion();
+   DrawOverlays(true, &dc);
 }
 
-void AdornedRulerPanel::OnSize(wxSizeEvent & WXUNUSED(evt))
+void AdornedRulerPanel::OnSize(wxSizeEvent &evt)
 {
    mOuter = GetClientRect();
    if (mOuter.GetWidth() == 0 || mOuter.GetHeight() == 0)
@@ -1870,18 +2261,53 @@ void AdornedRulerPanel::OnSize(wxSizeEvent & WXUNUSED(evt))
       return;
    }
 
+   UpdateRects();
+
+   OverlayPanel::OnSize(evt);
+}
+
+void AdornedRulerPanel::UpdateRects()
+{
    mInner = mOuter;
-   mInner.x += 1;          // +1 for left bevel
-   mInner.y += 1;          // +1 for top bevel
-   mInner.width -= 2;      // -2 for left and right bevels
-   mInner.height -= 3;     // -3 for top and bottom bevels and bottom line
+   mInner.x += LeftMargin;
+   mInner.width -= (LeftMargin + RightMargin);
+
+   auto top = &mInner;
+   auto bottom = &mInner;
+
+   if (mShowScrubbing) {
+      mScrubZone = mInner;
+      auto scrubHeight = std::min(mScrubZone.height, (int)(ScrubHeight));
+
+      int topHeight;
+#ifdef SCRUB_ABOVE
+      top = &mScrubZone, topHeight = scrubHeight;
+#else
+      auto qpHeight = mScrubZone.height - scrubHeight;
+      bottom = &mScrubZone, topHeight = qpHeight;
+      // Increase scrub zone height so that hit testing finds it and
+      // not QP region, when on bottom 'edge'.
+      mScrubZone.height+=BottomMargin;
+#endif
+
+      top->height = topHeight;
+      bottom->height -= topHeight;
+      bottom->y += topHeight;
+   }
+
+   top->y += TopMargin;
+   top->height -= TopMargin;
+
+   bottom->height -= BottomMargin;
+
+   if (!mShowScrubbing)
+      mScrubZone = mInner;
 
    mRuler.SetBounds(mInner.GetLeft(),
                     mInner.GetTop(),
                     mInner.GetRight(),
                     mInner.GetBottom());
 
-   Refresh();
 }
 
 double AdornedRulerPanel::Pos2Time(int p, bool ignoreFisheye)
@@ -1914,8 +2340,91 @@ bool AdornedRulerPanel::IsWithinMarker(int mousePosX, double markerTime)
 void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
 {
    // Disable mouse actions on Timeline while recording.
-   if (mIsRecording)
+   if (mIsRecording) {
+      if (HasCapture())
+         ReleaseMouse();
       return;
+   }
+
+   const auto position = evt.GetPosition();
+
+   const bool inScrubZone =
+      // only if scrubbing is allowed now
+      mProject->GetScrubber().CanScrub() &&
+      mShowScrubbing &&
+      mScrubZone.Contains(position);
+   const bool inQPZone = 
+      (!inScrubZone) && mInner.Contains(position);
+
+   const StatusChoice zone =
+      evt.Leaving()
+      ? StatusChoice::Leaving
+      : inScrubZone
+        ? StatusChoice::EnteringScrubZone
+        : inQPZone
+          ? StatusChoice::EnteringQP
+          : StatusChoice::NoChange;
+   const bool changeInZone = (zone != mPrevZone);
+   const bool changing = evt.Leaving() || evt.Entering() || changeInZone;
+
+   wxCoord xx = evt.GetX();
+   wxCoord mousePosX = xx;
+   UpdateQuickPlayPos(mousePosX);
+   HandleSnapping();
+
+   // If not looping, restrict selection to end of project
+   if (zone == StatusChoice::EnteringQP && !evt.ShiftDown()) {
+      const double t1 = mTracks->GetEndTime();
+      mQuickPlayPos = std::min(t1, mQuickPlayPos);
+   }
+
+   // Handle status bar messages
+   UpdateStatusBarAndTooltips (changing ? zone : StatusChoice::NoChange);
+
+   mPrevZone = zone;
+
+   auto &scrubber = mProject->GetScrubber();
+   if (scrubber.HasStartedScrubbing()) {
+      if (evt.RightDown() )
+         // Fall through to context menu handling
+         ;
+      else if ( evt.LeftUp() && inScrubZone)
+         // Fall through to seeking changes to scrubbing
+         ;
+//      else if ( evt.LeftDown() && inScrubZone)
+//         // Fall through to ready to seek
+//         ;
+      else {
+         bool switchToQP = (zone == StatusChoice::EnteringQP && mQuickPlayEnabled);
+         if (switchToQP && evt.LeftDown()) {
+            // We can't stop scrubbing yet (see comments in Bug 1391), but we can pause it.
+            mProject->OnPause();
+            // Don't return, fall through
+         }
+         else if (scrubber.IsPaused())
+            // Just fall through
+            ;
+         else {
+            // If already clicked for scrub, preempt the usual event handling,
+            // no matter what the y coordinate.
+
+            // Do this hack so scrubber can detect mouse drags anywhere
+            evt.ResumePropagation(wxEVENT_PROPAGATE_MAX);
+
+            if (scrubber.IsScrubbing())
+               evt.Skip();
+            else
+               evt.Skip();
+
+            // Don't do this, it slows down drag-scrub on Mac.
+            // Timer updates of display elsewhere make it unnecessary.
+            // Done here, it's too frequent.
+            // ShowQuickPlayIndicator();
+
+            return;
+         }
+      }
+   }
 
    // Store the initial play region state
    if(mMouseEventState == mesNone) {
@@ -1924,124 +2433,158 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
       mPlayRegionLock = mProject->IsPlayRegionLocked();
    }
 
-   // Keep Quick-Play within usable track area.
-   TrackPanel *tp = mProject->GetTrackPanel();
-   int mousePosX, width;
-   tp->GetTracksUsableArea(&width, NULL);
-   mousePosX = std::max(evt.GetX(), tp->GetLeftOffset());
-   mousePosX = std::min(mousePosX, tp->GetLeftOffset() + width - 1);
-
-   bool isWithinStart = IsWithinMarker(mousePosX, mOldPlayRegionStart);
-   bool isWithinEnd = IsWithinMarker(mousePosX, mOldPlayRegionEnd);
-   bool isWithinClick = (mLeftDownClick >= 0) && IsWithinMarker(mousePosX, mLeftDownClick);
-   bool canDragSel = !mPlayRegionLock && mPlayRegionDragsSelection;
-
-   double t0 = mTracks->GetStartTime();
-   double t1 = mTracks->GetEndTime();
-   double sel0 = mProject->GetSel0();
-   double sel1 = mProject->GetSel1();
-
-   mLastMouseX = mousePosX;
-   mQuickPlayPos = Pos2Time(mousePosX);
-   // If not looping, restrict selection to end of project
-   if (!evt.ShiftDown()) {
-      mQuickPlayPos = std::min(t1, mQuickPlayPos);
-   }
-
-   if (evt.Leaving()) {
-      mQuickPlayInd = false;
-      DrawQuickPlayIndicator(NULL);
-      Refresh();
+   // Handle entering and leaving of the bar, or movement from
+   // one portion (quick play or scrub) to the other
+   if (evt.Leaving() || (changeInZone && zone != StatusChoice::EnteringQP)) {
+      if (evt.Leaving()) {
+         // Erase the line
+         HideQuickPlayIndicator();
+      }
 
       SetCursor(mCursorDefault);
       mIsWE = false;
 
-      if (mSnapManager) {
-         delete mSnapManager;
-         mSnapManager = NULL;
-      }
-      return;
+      mSnapManager.reset();
+
+      if(evt.Leaving())
+         return;
+      // else, may detect a scrub click below
    }
-   else if (evt.Entering()) {
+   else if (evt.Entering() || (changeInZone && zone == StatusChoice::EnteringQP)) {
       SetCursor(mCursorHand);
-      mQuickPlayInd = false;
-      DrawQuickPlayIndicator(NULL);
+      HideQuickPlayIndicator();
       return;
    }
 
-   if (evt.RightDown() && !(evt.LeftIsDown())) {
-      ShowMenu(evt.GetPosition());
-      if (HasCapture())
-         ReleaseMouse();
-   }
-
-   if (!mQuickPlayEnabled)
+   // Handle popup menus
+   if (!HasCapture() && evt.RightDown() && !(evt.LeftIsDown())) {
+      ShowContextMenu
+         (inScrubZone ? MenuChoice::Scrub : MenuChoice::QuickPlay,
+          &position);
       return;
-
-  if (isWithinStart || isWithinEnd) {
-      if (!mIsWE) {
-         SetCursor(mCursorSizeWE);
-         mIsWE = true;
-      }
    }
-   else {
-      if (mIsWE) {
-         SetCursor(mCursorHand);
-         mIsWE = false;
+   else if( !HasCapture() && evt.LeftUp() && inScrubZone ) {
+      if( scrubber.IsOneShotSeeking() ){
+         scrubber.mInOneShotMode = false;
+         return;
       }
+      //wxLogDebug("up");
+      // mouse going up => we shift to scrubbing.
+      scrubber.MarkScrubStart(evt.m_x,
+         TracksPrefs::GetPinnedHeadPreference(), false);
+      UpdateStatusBarAndTooltips(StatusChoice::EnteringScrubZone);
+      // repaint_all so that the indicator changes shape.
+      bool repaint_all = true;
+      ShowQuickPlayIndicator(repaint_all);
+      return;
    }
-
-   HandleSnapping();
-
-   mQuickPlayInd = true;
-   wxClientDC dc(this);
-   DrawQuickPlayIndicator(&dc);
-
-   if (evt.LeftDown())
-   {
-      // Temporarily unlock locked play region
-      if (mPlayRegionLock && evt.LeftDown()) {
-         //mPlayRegionLock = true;
-         mProject->OnUnlockPlayRegion();
+   else if ( !HasCapture() && inScrubZone) {
+      // mouse going down => we are (probably) seeking
+      bool repaint_all = false;
+      if (evt.LeftDown()) {
+         //wxLogDebug("down");
+         scrubber.mInOneShotMode = !scrubber.IsScrubbing();
+         scrubber.MarkScrubStart(evt.m_x,
+            TracksPrefs::GetPinnedHeadPreference(), false);
+         UpdateStatusBarAndTooltips(StatusChoice::EnteringScrubZone);
+      } 
+      else if( changeInZone ) {
+         repaint_all = true;
       }
 
-      mLeftDownClick = mQuickPlayPos;
-      isWithinClick = IsWithinMarker(mousePosX, mLeftDownClick);
+      ShowQuickPlayIndicator(repaint_all);
+      return;
+   }
+   else if ( mQuickPlayEnabled) {
+      bool isWithinStart = IsWithinMarker(mousePosX, mOldPlayRegionStart);
+      bool isWithinEnd = IsWithinMarker(mousePosX, mOldPlayRegionEnd);
 
       if (isWithinStart || isWithinEnd) {
-         // If Quick-Play is playing from a point, we need to treat it as a click
-         // not as dragging.
-         if (mOldPlayRegionStart == mOldPlayRegionEnd)
-            mMouseEventState = mesSelectingPlayRegionClick;
-         // otherwise check which marker is nearer
-         else {
-            // Don't compare times, compare positions.
-            //if (fabs(mQuickPlayPos - mPlayRegionStart) < fabs(mQuickPlayPos - mPlayRegionEnd))
-            if (abs(Time2Pos(mQuickPlayPos) - Time2Pos(mPlayRegionStart)) <
-               abs(Time2Pos(mQuickPlayPos) - Time2Pos(mPlayRegionEnd)))
-               mMouseEventState = mesDraggingPlayRegionStart;
-            else
-               mMouseEventState = mesDraggingPlayRegionEnd;
+         if (!mIsWE) {
+            SetCursor(mCursorSizeWE);
+            mIsWE = true;
          }
       }
       else {
-         // Clicked but not yet dragging
-         mMouseEventState = mesSelectingPlayRegionClick;
+         if (mIsWE) {
+            SetCursor(mCursorHand);
+            mIsWE = false;
+         }
       }
 
-      // Check if we are dragging BEFORE CaptureMouse.
-      if (mMouseEventState != mesNone)
-         SetCursor(mCursorSizeWE);
-      CaptureMouse();
+      if (evt.LeftDown()) {
+         if( inQPZone ){
+            HandleQPClick(evt, mousePosX);
+            HandleQPDrag(evt, mousePosX);
+            ShowQuickPlayIndicator();
+         }
+      }
+      else if (evt.LeftIsDown() && HasCapture()) {
+         HandleQPDrag(evt, mousePosX);
+         ShowQuickPlayIndicator();
+      }
+      else if (evt.LeftUp() && HasCapture()) {
+         HandleQPRelease(evt);
+         ShowQuickPlayIndicator();
+      }
+      else // if (!inScrubZone) 
+         ShowQuickPlayIndicator();
+   }
+}
+
+void AdornedRulerPanel::HandleQPClick(wxMouseEvent &evt, wxCoord mousePosX)
+{
+   // Temporarily unlock locked play region
+   if (mPlayRegionLock && evt.LeftDown()) {
+      //mPlayRegionLock = true;
+      mProject->OnUnlockPlayRegion();
    }
 
-   if (evt.LeftIsDown()) {
-      switch (mMouseEventState)
-      {
+   mLeftDownClick = mQuickPlayPos;
+   bool isWithinStart = IsWithinMarker(mousePosX, mOldPlayRegionStart);
+   bool isWithinEnd = IsWithinMarker(mousePosX, mOldPlayRegionEnd);
+
+   if (isWithinStart || isWithinEnd) {
+      // If Quick-Play is playing from a point, we need to treat it as a click
+      // not as dragging.
+      if (mOldPlayRegionStart == mOldPlayRegionEnd)
+         mMouseEventState = mesSelectingPlayRegionClick;
+      // otherwise check which marker is nearer
+      else {
+         // Don't compare times, compare positions.
+         //if (fabs(mQuickPlayPos - mPlayRegionStart) < fabs(mQuickPlayPos - mPlayRegionEnd))
+         if (abs(Time2Pos(mQuickPlayPos) - Time2Pos(mPlayRegionStart)) <
+             abs(Time2Pos(mQuickPlayPos) - Time2Pos(mPlayRegionEnd)))
+            mMouseEventState = mesDraggingPlayRegionStart;
+         else
+            mMouseEventState = mesDraggingPlayRegionEnd;
+      }
+   }
+   else {
+      // Clicked but not yet dragging
+      mMouseEventState = mesSelectingPlayRegionClick;
+   }
+
+   // Check if we are dragging BEFORE CaptureMouse.
+   if (mMouseEventState != mesNone)
+      SetCursor(mCursorSizeWE);
+   if ( !HasCapture() )
+      CaptureMouse();
+}
+
+void AdornedRulerPanel::HandleQPDrag(wxMouseEvent &/*event*/, wxCoord mousePosX)
+{
+   bool isWithinClick = (mLeftDownClick >= 0) && IsWithinMarker(mousePosX, mLeftDownClick);
+   bool isWithinStart = IsWithinMarker(mousePosX, mOldPlayRegionStart);
+   bool isWithinEnd = IsWithinMarker(mousePosX, mOldPlayRegionEnd);
+   bool canDragSel = !mPlayRegionLock && mPlayRegionDragsSelection;
+
+   switch (mMouseEventState)
+   {
       case mesNone:
          // If close to either end of play region, snap to closest
          if (isWithinStart || isWithinEnd) {
-            DrawQuickPlayIndicator(NULL);
+            HideQuickPlayIndicator();
 
             if (fabs(mQuickPlayPos - mOldPlayRegionStart) < fabs(mQuickPlayPos - mOldPlayRegionEnd))
                mQuickPlayPos = mOldPlayRegionStart;
@@ -2050,7 +2593,7 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
          }
          break;
       case mesDraggingPlayRegionStart:
-         DrawQuickPlayIndicator(NULL);
+         HideQuickPlayIndicator();
 
          // Don't start dragging until beyond tollerance initial playback start
          if (!mIsDragging && isWithinStart)
@@ -2067,14 +2610,14 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
          break;
       case mesDraggingPlayRegionEnd:
          if (!mIsDragging && isWithinEnd) {
-            DrawQuickPlayIndicator(NULL);
+            HideQuickPlayIndicator();
 
             mQuickPlayPos = mOldPlayRegionEnd;
          }
          else
             mIsDragging = true;
          if (isWithinStart) {
-            DrawQuickPlayIndicator(NULL);
+            HideQuickPlayIndicator();
 
             mQuickPlayPos = mOldPlayRegionStart;
          }
@@ -2085,9 +2628,9 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
          break;
       case mesSelectingPlayRegionClick:
 
-         // Don't start dragging until mouse is beyond tollerance of initial click.
+         // Don't start dragging until mouse is beyond tolerance of initial click.
          if (isWithinClick || mLeftDownClick == -1) {
-            DrawQuickPlayIndicator(NULL);
+            HideQuickPlayIndicator();
 
             mQuickPlayPos = mLeftDownClick;
             mPlayRegionStart = mLeftDownClick;
@@ -2099,7 +2642,7 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
          break;
       case mesSelectingPlayRegionRange:
          if (isWithinClick) {
-            DrawQuickPlayIndicator(NULL);
+            HideQuickPlayIndicator();
 
             mQuickPlayPos = mLeftDownClick;
          }
@@ -2116,163 +2659,307 @@ void AdornedRulerPanel::OnMouseEvents(wxMouseEvent &evt)
             DragSelection();
          }
          break;
-      }
-      Refresh();
-      Update();
+   }
+   Refresh();
+   Update();
+}
+
+void AdornedRulerPanel::HandleQPRelease(wxMouseEvent &evt)
+{
+   if (HasCapture())
+      ReleaseMouse();
+   else
+      return;
+
+   HideQuickPlayIndicator();
+
+   if (mPlayRegionEnd < mPlayRegionStart) {
+      // Swap values to ensure mPlayRegionStart < mPlayRegionEnd
+      double tmp = mPlayRegionStart;
+      mPlayRegionStart = mPlayRegionEnd;
+      mPlayRegionEnd = tmp;
    }
 
-   if (evt.LeftUp())
-   {
-      mQuickPlayInd = false;
-      DrawQuickPlayIndicator(NULL);
+   const double t0 = mTracks->GetStartTime();
+   const double t1 = mTracks->GetEndTime();
+   const double sel0 = mProject->GetSel0();
+   const double sel1 = mProject->GetSel1();
 
-      if (HasCapture())
-         ReleaseMouse();
-
-      if (mPlayRegionEnd < mPlayRegionStart) {
-         // Swap values to ensure mPlayRegionStart < mPlayRegionEnd
-         double tmp = mPlayRegionStart;
-         mPlayRegionStart = mPlayRegionEnd;
-         mPlayRegionEnd = tmp;
-      }
-
-      // We want some audio in the selection, but we allow a dragged
-      // region to include selected white-space and space before audio start.
-      if (evt.ShiftDown() && (mPlayRegionStart == mPlayRegionEnd)) {
-         // Looping the selection or project.
-         // Disable if track selection is in white-space beyond end of tracks and
-         // play position is outside of track contents.
-         if (((sel1 < t0) || (sel0 > t1)) &&
-            ((mPlayRegionStart < t0) || (mPlayRegionStart > t1))) {
-            ClearPlayRegion();
-         }
-      }
-      // Disable if beyond end.
-      else if (mPlayRegionStart >= t1) {
+   // We want some audio in the selection, but we allow a dragged
+   // region to include selected white-space and space before audio start.
+   if (evt.ShiftDown() && (mPlayRegionStart == mPlayRegionEnd)) {
+      // Looping the selection or project.
+      // Disable if track selection is in white-space beyond end of tracks and
+      // play position is outside of track contents.
+      if (((sel1 < t0) || (sel0 > t1)) &&
+          ((mPlayRegionStart < t0) || (mPlayRegionStart > t1))) {
          ClearPlayRegion();
       }
-      // Disable if empty selection before start.
-      // (allow Quick-Play region to include 'pre-roll' white space)
-      else if (((mPlayRegionEnd - mPlayRegionStart) > 0.0) && (mPlayRegionEnd < t0)) {
-         ClearPlayRegion();
-      }
+   }
+   // Disable if beyond end.
+   else if (mPlayRegionStart >= t1) {
+      ClearPlayRegion();
+   }
+   // Disable if empty selection before start.
+   // (allow Quick-Play region to include 'pre-roll' white space)
+   else if (((mPlayRegionEnd - mPlayRegionStart) > 0.0) && (mPlayRegionEnd < t0)) {
+      ClearPlayRegion();
+   }
 
-      // Start / Restart playback on left click.
-      bool startPlaying = (mPlayRegionStart >= 0);
+   StartQPPlay(evt.ShiftDown(), evt.ControlDown());
 
-      if (startPlaying) {
-         ControlToolBar* ctb = mProject->GetControlToolBar();
-         ctb->StopPlaying();
+   mMouseEventState = mesNone;
+   mIsDragging = false;
+   mLeftDownClick = -1;
 
-         bool loopEnabled = true;
-         double start, end;
+   if (mPlayRegionLock) {
+      // Restore Locked Play region
+      SetPlayRegion(mOldPlayRegionStart, mOldPlayRegionEnd);
+      mProject->OnLockPlayRegion();
+      // and release local lock
+      mPlayRegionLock = false;
+   }
+}
 
-         if ((mPlayRegionEnd - mPlayRegionStart == 0.0) && evt.ShiftDown()) {
-            // Loop play a point will loop either a selection or the project.
-            if ((mPlayRegionStart > sel0) && (mPlayRegionStart < sel1)) {
-               // we are in a selection, so use the selection
-               start = sel0;
-               end = sel1;
-            } // not in a selection, so use the project
-            else {
-               start = t0;
-               end = t1;
-            }
-         }
+void AdornedRulerPanel::StartQPPlay(bool looped, bool cutPreview)
+{
+   const double t0 = mTracks->GetStartTime();
+   const double t1 = mTracks->GetEndTime();
+   const double sel0 = mProject->GetSel0();
+   const double sel1 = mProject->GetSel1();
+
+   // Start / Restart playback on left click.
+   bool startPlaying = (mPlayRegionStart >= 0);
+
+   if (startPlaying) {
+      ControlToolBar* ctb = mProject->GetControlToolBar();
+      ctb->StopPlaying();
+
+      bool loopEnabled = true;
+      double start, end;
+
+      if ((mPlayRegionEnd - mPlayRegionStart == 0.0) && looped) {
+         // Loop play a point will loop either a selection or the project.
+         if ((mPlayRegionStart > sel0) && (mPlayRegionStart < sel1)) {
+            // we are in a selection, so use the selection
+            start = sel0;
+            end = sel1;
+         } // not in a selection, so use the project
          else {
-            start = mPlayRegionStart;
-            end = mPlayRegionEnd;
+            start = t0;
+            end = t1;
          }
-         // Looping a tiny selection may freeze, so just play it once.
-         loopEnabled = ((end - start) > 0.001)? true : false;
-
-         AudioIOStartStreamOptions options(mProject->GetDefaultPlayOptions());
-         options.playLooped = (loopEnabled && evt.ShiftDown());
-
-         if (!evt.ControlDown())
-            options.pStartTime = &mPlayRegionStart;
-         else
-            options.timeTrack = NULL;
-
-         ctb->PlayPlayRegion((SelectedRegion(start, end)),
-                             options,
-                             evt.ControlDown(),
-                             false,
-                             true);
-
-         mPlayRegionStart = start;
-         mPlayRegionEnd = end;
-         Refresh();
       }
-
-      mMouseEventState = mesNone;
-      mIsDragging = false;
-      mLeftDownClick = -1;
-
-      if (mPlayRegionLock) {
-         // Restore Locked Play region
-         SetPlayRegion(mOldPlayRegionStart, mOldPlayRegionEnd);
-         mProject->OnLockPlayRegion();
-         // and release local lock
-         mPlayRegionLock = false;
+      else {
+         start = mPlayRegionStart;
+         end = mPlayRegionEnd;
       }
+      // Looping a tiny selection may freeze, so just play it once.
+      loopEnabled = ((end - start) > 0.001)? true : false;
+
+      AudioIOStartStreamOptions options(mProject->GetDefaultPlayOptions());
+      options.playLooped = (loopEnabled && looped);
+
+      if (!cutPreview)
+         options.pStartTime = &mPlayRegionStart;
+      else
+         options.timeTrack = NULL;
+
+      ControlToolBar::PlayAppearance appearance =
+      cutPreview ? ControlToolBar::PlayAppearance::CutPreview
+      : options.playLooped ? ControlToolBar::PlayAppearance::Looped
+      : ControlToolBar::PlayAppearance::Straight;
+      ctb->PlayPlayRegion((SelectedRegion(start, end)),
+                          options, PlayMode::normalPlay,
+                          appearance,
+                          false,
+                          true);
+
+      mPlayRegionStart = start;
+      mPlayRegionEnd = end;
+      Refresh();
    }
+}
+
+void AdornedRulerPanel::UpdateStatusBarAndTooltips(StatusChoice choice)
+{
+   if (choice == StatusChoice::NoChange)
+      return;
+
+   wxString message {};
+
+   const auto &scrubber = mProject->GetScrubber();
+   const bool scrubbing = scrubber.HasStartedScrubbing();
+   if (scrubbing && choice != StatusChoice::Leaving)
+      // Don't distinguish zones
+      choice = StatusChoice::EnteringScrubZone;
+
+   switch (choice) {
+      case StatusChoice::EnteringQP:
+      {
+         // message = Insert timeline status bar message here
+      }
+         break;
+
+      case StatusChoice::EnteringScrubZone:
+      {
+         message = ScrubbingMessage(scrubber);
+      }
+         break;
+
+      default:
+         break;
+   }
+
+   // Display a message, or empty message
+   mProject->TP_DisplayStatusMessage(message);
+
+   RegenerateTooltips(choice);
+}
+
+// This version toggles ruler state indirectly via the scrubber
+// to ensure that all the places where the state is shown update.
+// For example buttons and menus must update.
+void AdornedRulerPanel::OnToggleScrubRulerFromMenu(wxCommandEvent& Evt)
+{
+   auto &scrubber = mProject->GetScrubber();
+   scrubber.OnToggleScrubRuler( Evt );
+}
+
+void AdornedRulerPanel::OnToggleScrubRuler(/*wxCommandEvent&*/)
+{
+   mShowScrubbing = !mShowScrubbing;
+   WriteScrubEnabledPref(mShowScrubbing);
+   gPrefs->Flush();
+   SetPanelSize();
+}
+
+void AdornedRulerPanel::SetPanelSize()
+{
+   wxSize size { GetSize().GetWidth(), GetRulerHeight(mShowScrubbing) };
+   SetSize(size);
+   SetMinSize(size);
+   GetParent()->PostSizeEventToParent();
+}
+
+void AdornedRulerPanel::OnContextMenu(wxContextMenuEvent & WXUNUSED(event))
+{
+   ShowContextMenu(MenuChoice::QuickPlay, nullptr);
+}
+
+void AdornedRulerPanel::UpdateButtonStates()
+{
+   auto common = [this]
+   (AButton &button, const wxString &commandName, const wxString &label) {
+      std::vector<wxString> commands;
+      commands.push_back(label);
+      commands.push_back(commandName);
+      ToolBar::SetButtonToolTip(button, commands);
+      button.SetLabel(button.GetToolTipText());
+
+      button.UpdateStatus();
+   };
+
+   {
+      bool state = TracksPrefs::GetPinnedHeadPreference();
+      auto pinButton = static_cast<AButton*>(FindWindow(OnTogglePinnedStateID));
+      if( !state )
+         pinButton->PopUp();
+      else
+         pinButton->PushDown();
+      pinButton->SetAlternateIdx(state ? 0 : 1);
+      const auto label = state
+      // Label descibes the present state, not what the click does
+      // (which is, to toggle the state)
+      ? _("Pinned Record/Play head")
+      : _("Unpinned Record/Play head");
+      common(*pinButton, wxT("PinnedHead"), label);
+   }
+}
+
+void AdornedRulerPanel::OnTogglePinnedState(wxCommandEvent & /*event*/)
+{
+   mProject->OnTogglePinnedHead();
+   UpdateButtonStates();
 }
 
 void AdornedRulerPanel::OnCaptureLost(wxMouseCaptureLostEvent & WXUNUSED(evt))
 {
-   DrawQuickPlayIndicator(NULL);
+   HideQuickPlayIndicator();
 
    wxMouseEvent e(wxEVT_LEFT_UP);
    e.m_x = mLastMouseX;
    OnMouseEvents(e);
 }
 
-// Pop-up menu
+void AdornedRulerPanel::UpdateQuickPlayPos(wxCoord &mousePosX)
+{
+   // Keep Quick-Play within usable track area.
+   TrackPanel *tp = mProject->GetTrackPanel();
+   int width;
+   tp->GetTracksUsableArea(&width, NULL);
+   mousePosX = std::max(mousePosX, tp->GetLeftOffset());
+   mousePosX = std::min(mousePosX, tp->GetLeftOffset() + width - 1);
+
+   mLastMouseX = mousePosX;
+   mQuickPlayPos = Pos2Time(mousePosX);
+}
+
+// Pop-up menus
 
 void AdornedRulerPanel::ShowMenu(const wxPoint & pos)
 {
-   wxMenu *rulerMenu = new wxMenu();
+   wxMenu rulerMenu;
 
    if (mQuickPlayEnabled)
-      rulerMenu->Append(OnToggleQuickPlayID, _("Disable Quick-Play"));
+      rulerMenu.Append(OnToggleQuickPlayID, _("Disable Quick-Play"));
    else
-      rulerMenu->Append(OnToggleQuickPlayID, _("Enable Quick-Play"));
+      rulerMenu.Append(OnToggleQuickPlayID, _("Enable Quick-Play"));
 
    wxMenuItem *dragitem;
    if (mPlayRegionDragsSelection && !mProject->IsPlayRegionLocked())
-      dragitem = rulerMenu->Append(OnSyncQuickPlaySelID, _("Disable dragging selection"));
+      dragitem = rulerMenu.Append(OnSyncQuickPlaySelID, _("Disable dragging selection"));
    else
-      dragitem = rulerMenu->Append(OnSyncQuickPlaySelID, _("Enable dragging selection"));
+      dragitem = rulerMenu.Append(OnSyncQuickPlaySelID, _("Enable dragging selection"));
    dragitem->Enable(mQuickPlayEnabled && !mProject->IsPlayRegionLocked());
 
 #if wxUSE_TOOLTIPS
    if (mTimelineToolTip)
-      rulerMenu->Append(OnTimelineToolTipID, _("Disable Timeline Tooltips"));
+      rulerMenu.Append(OnTimelineToolTipID, _("Disable Timeline Tooltips"));
    else
-      rulerMenu->Append(OnTimelineToolTipID, _("Enable Timeline Tooltips"));
+      rulerMenu.Append(OnTimelineToolTipID, _("Enable Timeline Tooltips"));
 #endif
 
    if (mViewInfo->bUpdateTrackIndicator)
-      rulerMenu->Append(OnAutoScrollID, _("Do not scroll while playing"));
+      rulerMenu.Append(OnAutoScrollID, _("Do not scroll while playing"));
    else
-      rulerMenu->Append(OnAutoScrollID, _("Update display while playing"));
+      rulerMenu.Append(OnAutoScrollID, _("Update display while playing"));
 
    wxMenuItem *prlitem;
    if (!mProject->IsPlayRegionLocked())
-      prlitem = rulerMenu->Append(OnLockPlayRegionID, _("Lock Play Region"));
+      prlitem = rulerMenu.Append(OnLockPlayRegionID, _("Lock Play Region"));
    else
-      prlitem = rulerMenu->Append(OnLockPlayRegionID, _("Unlock Play Region"));
+      prlitem = rulerMenu.Append(OnLockPlayRegionID, _("Unlock Play Region"));
    prlitem->Enable(mProject->IsPlayRegionLocked() || (mPlayRegionStart != mPlayRegionEnd));
 
-   PopupMenu(rulerMenu, pos);
+   wxMenuItem *ruleritem;
+   if (mShowScrubbing)
+      ruleritem = rulerMenu.Append(OnScrubRulerID, _("Disable Scrub Ruler"));
+   else
+      ruleritem = rulerMenu.Append(OnScrubRulerID, _("Enable Scrub Ruler"));
 
-   delete rulerMenu;
-   // dismiss and clear Quick-Play indicator
-   mQuickPlayInd = false;
-   DrawQuickPlayIndicator(NULL);
+   PopupMenu(&rulerMenu, pos);
+}
 
-   Refresh();
+void AdornedRulerPanel::ShowScrubMenu(const wxPoint & pos)
+{
+   auto &scrubber = mProject->GetScrubber();
+   PushEventHandler(&scrubber);
+   auto cleanup = finally([this]{ PopEventHandler(); });
+
+   wxMenu rulerMenu;
+   mProject->GetScrubber().PopulatePopupMenu(rulerMenu);
+   PopupMenu(&rulerMenu, pos);
 }
 
 void AdornedRulerPanel::OnToggleQuickPlay(wxCommandEvent&)
@@ -2280,7 +2967,7 @@ void AdornedRulerPanel::OnToggleQuickPlay(wxCommandEvent&)
    mQuickPlayEnabled = (mQuickPlayEnabled)? false : true;
    gPrefs->Write(wxT("/QuickPlay/QuickPlayEnabled"), mQuickPlayEnabled);
    gPrefs->Flush();
-   RegenerateTooltips();
+   RegenerateTooltips(mPrevZone);
 }
 
 void AdornedRulerPanel::OnSyncSelToQuickPlay(wxCommandEvent&)
@@ -2307,7 +2994,7 @@ void AdornedRulerPanel::DragSelection()
 void AdornedRulerPanel::HandleSnapping()
 {
    if (!mSnapManager) {
-      mSnapManager = new SnapManager(mTracks, mViewInfo);
+      mSnapManager = std::make_unique<SnapManager>(mTracks, mViewInfo);
    }
 
    bool snappedPoint, snappedTime;
@@ -2321,7 +3008,7 @@ void AdornedRulerPanel::OnTimelineToolTips(wxCommandEvent&)
    gPrefs->Write(wxT("/QuickPlay/ToolTips"), mTimelineToolTip);
    gPrefs->Flush();
 #if wxUSE_TOOLTIPS
-   RegenerateTooltips();
+   RegenerateTooltips(mPrevZone);
 #endif
 }
 
@@ -2353,9 +3040,9 @@ void AdornedRulerPanel::DoDrawPlayRegion(wxDC * dc)
 
    if (start >= 0)
    {
-      int x1 = Time2Pos(start) + 1;
-      int x2 = Time2Pos(end);
-      int y = mInner.height/2;
+      const int x1 = Time2Pos(start) + 1;
+      const int x2 = Time2Pos(end);
+      int y = mInner.y - TopMargin + mInner.height/2;
 
       bool isLocked = mProject->IsPlayRegionLocked();
       AColor::PlayRegionColor(dc, isLocked);
@@ -2395,29 +3082,68 @@ void AdornedRulerPanel::DoDrawPlayRegion(wxDC * dc)
 
          r.x = x1 + PLAY_REGION_TRIANGLE_SIZE;
          r.y = y - PLAY_REGION_RECT_HEIGHT/2 + PLAY_REGION_GLOBAL_OFFSET_Y;
-         r.width = x2-x1 - PLAY_REGION_TRIANGLE_SIZE*2;
+         r.width = std::max(0, x2-x1 - PLAY_REGION_TRIANGLE_SIZE*2);
          r.height = PLAY_REGION_RECT_HEIGHT;
          dc->DrawRectangle(r);
       }
    }
 }
 
-void AdornedRulerPanel::DoDrawBorder(wxDC * dc)
+void AdornedRulerPanel::ShowContextMenu( MenuChoice choice, const wxPoint *pPosition)
+{
+   wxPoint position;
+   if(pPosition)
+      position = *pPosition;
+   else
+   {
+      auto rect = GetRect();
+      position = { rect.GetLeft() + 1, rect.GetBottom() + 1 };
+   }
+
+   switch (choice) {
+      case MenuChoice::QuickPlay:
+         ShowMenu(position); break;
+      case MenuChoice::Scrub:
+         ShowScrubMenu(position); break;
+      default:
+         return;
+   }
+
+   // dismiss and clear Quick-Play indicator
+   HideQuickPlayIndicator();
+
+   if (HasCapture())
+      ReleaseMouse();
+}
+
+void AdornedRulerPanel::DoDrawBackground(wxDC * dc)
 {
    // Draw AdornedRulerPanel border
    AColor::MediumTrackInfo( dc, false );
    dc->DrawRectangle( mInner );
 
+   if (mShowScrubbing) {
+      // Let's distinguish the scrubbing area by using the same gray as for
+      // selected track control panel.
+      AColor::MediumTrackInfo(dc, true);
+      dc->DrawRectangle(mScrubZone);
+   }
+
+}
+
+void AdornedRulerPanel::DoDrawEdge(wxDC *dc)
+{
    wxRect r = mOuter;
-   r.width -= 1;                 // -1 for bevel
-   r.height -= 2;                // -2 for bevel and for bottom line
+   r.width -= RightMargin;
+   r.height -= BottomMargin;
    AColor::BevelTrackInfo( *dc, true, r );
 
+   // Black stroke at bottom
    dc->SetPen( *wxBLACK_PEN );
    dc->DrawLine( mOuter.x,
-                 mOuter.y + mOuter.height - 1,
-                 mOuter.x + mOuter.width,
-                 mOuter.y + mOuter.height - 1 );
+                mOuter.y + mOuter.height - 1,
+                mOuter.x + mOuter.width,
+                mOuter.y + mOuter.height - 1 );
 }
 
 void AdornedRulerPanel::DoDrawMarks(wxDC * dc, bool /*text */ )
@@ -2448,117 +3174,148 @@ void AdornedRulerPanel::DoDrawSelection(wxDC * dc)
 
    wxRect r;
    r.x = p0;
-   r.y = 1;
+   r.y = mInner.y;
    r.width = p1 - p0 - 1;
    r.height = mInner.height;
    dc->DrawRectangle( r );
 }
 
+int AdornedRulerPanel::GetRulerHeight(bool showScrubBar)
+{
+   return ProperRulerHeight + (showScrubBar ? ScrubHeight : 0);
+}
+
 void AdornedRulerPanel::SetLeftOffset(int offset)
 {
    mLeftOffset = offset;
-   mRuler.SetUseZoomInfo(offset);
-}
-
-void AdornedRulerPanel::DrawCursor(double time)
-{
-   mCurTime = time;
-
-   Refresh();
-}
-
-void AdornedRulerPanel::DoDrawCursor(wxDC * dc)
-{
-   const int x = Time2Pos(mCurTime);
-
-   // Draw cursor in ruler
-   dc->DrawLine( x, 1, x, mInner.height );
-}
-
-//
-//This draws the little triangular indicator on the
-//AdornedRulerPanel.
-//
-void AdornedRulerPanel::ClearIndicator()
-{
-   mIndType = -1;
-
-   Refresh();
-}
-
-void AdornedRulerPanel::DrawIndicator( double time, bool rec )
-{
-   mIndTime = time;
-
-   if (mIndTime < 0)
-   {
-      ClearIndicator();
-      return;
-   }
-
-   mIndType = ( rec ? 0 : 1 );
-
-   Refresh();
+   mRuler.SetUseZoomInfo(offset, mViewInfo);
 }
 
 // Draws the play/recording position indicator.
-void AdornedRulerPanel::DoDrawIndicator(wxDC * dc)
+void AdornedRulerPanel::DoDrawIndicator
+   (wxDC * dc, wxCoord xx, bool playing, int width, bool scrub, bool seek)
 {
-   int indsize = 6;
-   const int x = Time2Pos(mIndTime);
+   ADCChanger changer(dc); // Undo pen and brush changes at function exit
+
+   AColor::IndicatorColor( dc, playing );
 
    wxPoint tri[ 3 ];
-   tri[ 0 ].x = x - indsize;
-   tri[ 0 ].y = 1;
-   tri[ 1 ].x = x + indsize;
-   tri[ 1 ].y = 1;
-   tri[ 2 ].x = x;
-   tri[ 2 ].y = ( indsize * 3 ) / 2 + 1;
+   if (seek) {
+      auto height = IndicatorHeightForWidth(width);
+      // Make four triangles
+      const int TriangleWidth = width * 3 / 8;
 
-   AColor::IndicatorColor( dc, ( mIndType ? true : false ) );
-   dc->DrawPolygon( 3, tri );
+      // Double-double headed, left-right
+      auto yy = mShowScrubbing
+      ? mScrubZone.y
+      : (mInner.GetBottom() + 1) - 1 /* bevel */ - height;
+      tri[ 0 ].x = xx - IndicatorOffset;
+      tri[ 0 ].y = yy;
+      tri[ 1 ].x = xx - IndicatorOffset;
+      tri[ 1 ].y = yy + height;
+      tri[ 2 ].x = xx - TriangleWidth;
+      tri[ 2 ].y = yy + height / 2;
+      dc->DrawPolygon( 3, tri );
+
+      tri[ 0 ].x -= TriangleWidth;
+      tri[ 1 ].x -= TriangleWidth;
+      tri[ 2 ].x -= TriangleWidth;
+      dc->DrawPolygon( 3, tri );
+
+      tri[ 0 ].x = tri[ 1 ].x = xx + IndicatorOffset;
+      tri[ 2 ].x = xx + TriangleWidth;
+      dc->DrawPolygon( 3, tri );
+
+
+      tri[ 0 ].x += TriangleWidth;
+      tri[ 1 ].x += TriangleWidth;
+      tri[ 2 ].x += TriangleWidth;
+      dc->DrawPolygon( 3, tri );
+   }
+   else if (scrub) {
+      auto height = IndicatorHeightForWidth(width);
+      const int IndicatorHalfWidth = width / 2;
+
+      // Double headed, left-right
+      auto yy = mShowScrubbing
+         ? mScrubZone.y
+         : (mInner.GetBottom() + 1) - 1 /* bevel */ - height;
+      tri[ 0 ].x = xx - IndicatorOffset;
+      tri[ 0 ].y = yy;
+      tri[ 1 ].x = xx - IndicatorOffset;
+      tri[ 1 ].y = yy + height;
+      tri[ 2 ].x = xx - IndicatorHalfWidth;
+      tri[ 2 ].y = yy + height / 2;
+      dc->DrawPolygon( 3, tri );
+      tri[ 0 ].x = tri[ 1 ].x = xx + IndicatorOffset;
+      tri[ 2 ].x = xx + IndicatorHalfWidth;
+      dc->DrawPolygon( 3, tri );
+   }
+   else {
+      // synonyms... (makes compatibility with DarkAudacity easier).
+      #define bmpPlayPointerPinned bmpPinnedPlayHead
+      #define bmpPlayPointer bmpUnpinnedPlayHead
+      #define bmpRecordPointerPinned bmpPinnedRecordHead
+      #define bmpRecordPointer bmpUnpinnedRecordHead
+
+      bool pinned = TracksPrefs::GetPinnedHeadPreference();
+      wxBitmap & bmp = theTheme.Bitmap( pinned ? 
+         (playing ? bmpPlayPointerPinned : bmpRecordPointerPinned) :
+         (playing ? bmpPlayPointer : bmpRecordPointer) 
+      );
+      const int IndicatorHalfWidth = bmp.GetWidth() / 2;
+      dc->DrawBitmap( bmp, xx - IndicatorHalfWidth -1, mInner.y );
+#if 0
+
+      // Down pointing triangle
+      auto height = IndicatorHeightForWidth(width);
+      const int IndicatorHalfWidth = width / 2;
+      tri[ 0 ].x = xx - IndicatorHalfWidth;
+      tri[ 0 ].y = mInner.y;
+      tri[ 1 ].x = xx + IndicatorHalfWidth;
+      tri[ 1 ].y = mInner.y;
+      tri[ 2 ].x = xx;
+      tri[ 2 ].y = mInner.y + height;
+      dc->DrawPolygon( 3, tri );
+#endif
+   }
+}
+
+QuickPlayIndicatorOverlay *AdornedRulerPanel::GetOverlay()
+{
+   if (!mOverlay)
+      mOverlay = std::make_unique<QuickPlayIndicatorOverlay>(mProject);
+
+   return mOverlay.get();
+}
+
+void AdornedRulerPanel::ShowQuickPlayIndicator( bool repaint_all)
+{
+   ShowOrHideQuickPlayIndicator(true, repaint_all);
+}
+
+void AdornedRulerPanel::HideQuickPlayIndicator(bool repaint_all)
+{
+   ShowOrHideQuickPlayIndicator(false, repaint_all);
 }
 
 // Draws the vertical line and green triangle indicating the Quick Play cursor position.
-void AdornedRulerPanel::DrawQuickPlayIndicator(wxDC * dc)
+void AdornedRulerPanel::ShowOrHideQuickPlayIndicator(bool show, bool repaint_all)
 {
-   TrackPanel *tp = mProject->GetTrackPanel();
-
    double latestEnd = std::max(mTracks->GetEndTime(), mProject->GetSel1());
-   if (dc == NULL || (mQuickPlayPos >= latestEnd)) {
-      tp->DrawQuickPlayIndicator(-1);
-      mLastQuickPlayX = -1;
-      return;
+   if (!show || (mQuickPlayPos >= latestEnd)) {
+      GetOverlay()->Update(-1);
+   }
+   else {
+      const int x = Time2Pos(mQuickPlayPos);
+      bool previewScrub =
+      mPrevZone == StatusChoice::EnteringScrubZone &&
+      !mProject->GetScrubber().IsScrubbing();
+      GetOverlay()->Update(x, mIsSnapped, previewScrub);
    }
 
-   int indsize = 4;
-   int x = Time2Pos(mQuickPlayPos);
-
-   if (mLastQuickPlayX >= 0) {
-      // Restore the background, but make it a little oversized to make
-      // it happy OSX.
-      dc->Blit(mLastQuickPlayX - indsize - 1,
-               0,
-               indsize * 2 + 1 + 2,
-               (indsize * 3) / 2 + 1 + 2,
-               &mBackDC,
-               mLastQuickPlayX - indsize - 1,
-               0);
-   }
-   mLastQuickPlayX = x;
-
-   wxPoint tri[3];
-   tri[0].x = -indsize;
-   tri[0].y = 1;
-   tri[1].x = indsize;
-   tri[1].y = 1;
-   tri[2].x = 0;
-   tri[2].y = ( indsize * 3 ) / 2 + 1;
-
-   AColor::IndicatorColor( dc, true);
-   dc->DrawPolygon( 3, tri, x );
-
-   tp->DrawQuickPlayIndicator(x, mIsSnapped);
+   mProject->GetTrackPanel()->DrawOverlays(repaint_all);
+   DrawOverlays(repaint_all);
 }
 
 void AdornedRulerPanel::SetPlayRegion(double playRegionStart,
@@ -2583,7 +3340,8 @@ void AdornedRulerPanel::ClearPlayRegion()
 
    mPlayRegionStart = -1;
    mPlayRegionEnd = -1;
-   mQuickPlayInd = false;
+
+   HideQuickPlayIndicator();
 
    Refresh();
 }
@@ -2607,4 +3365,17 @@ void AdornedRulerPanel::GetPlayRegion(double* playRegionStart,
 void AdornedRulerPanel::GetMaxSize(wxCoord *width, wxCoord *height)
 {
    mRuler.GetMaxSize(width, height);
+}
+
+bool AdornedRulerPanel::s_AcceptsFocus{ false };
+
+auto AdornedRulerPanel::TemporarilyAllowFocus() -> TempAllowFocus {
+   s_AcceptsFocus = true;
+   return TempAllowFocus{ &s_AcceptsFocus };
+}
+
+void AdornedRulerPanel::SetFocusFromKbd()
+{
+   auto temp = TemporarilyAllowFocus();
+   SetFocus();
 }
